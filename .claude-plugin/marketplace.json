@@ -1,0 +1,24 @@
+{
+  "name": "idasql-tools",
+  "owner": {
+    "name": "Elias Bachaalany",
+    "email": "elias.bachaalany@gmail.com"
+  },
+  "metadata": {
+    "description": "SQL interface to IDA Pro databases for reverse engineering workflows"
+  },
+  "plugins": [
+    {
+      "name": "idasql",
+      "version": "0.0.10",
+      "description": "SQL interface to IDA Pro databases for querying and CRUD operations on functions, xrefs, strings, and decompiled code",
+      "author": {
+        "name": "Elias Bachaalany",
+        "email": "elias.bachaalany@gmail.com"
+      },
+      "source": "./plugins/idasql",
+      "keywords": ["ida", "reverse-engineering", "sql", "decompilation"],
+      "category": "reverse-engineering"
+    }
+  ]
+}

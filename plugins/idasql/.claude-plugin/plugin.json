@@ -1,0 +1,13 @@
+{
+  "name": "idasql",
+  "version": "0.0.10",
+  "description": "SQL interface to IDA Pro databases for querying and CRUD operations on functions, xrefs, strings, and decompiled code",
+  "author": {
+    "name": "Elias Bachaalany",
+    "email": "elias.bachaalany@gmail.com"
+  },
+  "homepage": "https://github.com/allthingsida/idasql",
+  "repository": "https://github.com/allthingsida/idasql-skills",
+  "license": "MIT",
+  "keywords": ["ida", "reverse-engineering", "sql", "decompilation"]
+}
