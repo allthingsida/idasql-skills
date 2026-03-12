@@ -103,6 +103,8 @@ Filter behavior:
 SELECT decompile(0x401000);
 
 -- COMMENTING: Use pseudocode table to add/edit/delete comments
+-- The example UPDATEs below assume 0x401020 is an already resolved writable
+-- non-brace anchor. Do not substitute func_addr or the first displayed row.
 -- Add inline comment (appears after semicolon)
 UPDATE pseudocode SET comment_placement = 'semi',
                       comment = 'buffer overflow here'
@@ -129,7 +131,7 @@ Rules:
 - Do not assume `ea == func_addr`.
 - The first displayed pseudocode row often has `ea = 0` and is not the right write target.
 - One `ea` can map to multiple rows (`{`, statement, `}`); prefer a unique non-brace anchor.
-- Use `line_num` only to inspect candidate rows. Persisted writes are keyed by `treeloc_t { ea, comment_placement }`, so shared-`ea` rows are not independently writable.
+- Use `line_num` only to inspect candidate rows. Persisted writes are keyed by `treeloc_t { ea, comment_placement }`; shared-`ea` rows need extra care, so do not assume every displayed shared-`ea` row is independently writable.
 - `annotations` owns the broader cleanup workflow; this section owns the anchor-selection rule.
 - This anchor is the canonical target for top-of-function semantic summaries used in later search and whole-program understanding.
 

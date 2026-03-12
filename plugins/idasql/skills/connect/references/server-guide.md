@@ -92,6 +92,8 @@ def post_sql(sql: str):
 
 # Pattern 2: batch mutation + refresh
 func = 0x180021137
+# Each ea below must already be a resolved writable pseudocode anchor from a
+# prior inspection pass. Do not use guessed function-entry eas.
 updates = [
     (0x180021798, "key%5 selects junk prefix byte"),
     (0x1800217C4, "store thunk address in IAT slot"),

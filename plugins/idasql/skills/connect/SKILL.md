@@ -246,6 +246,7 @@ Core decompiler surfaces:
   - Use this first when the user asks to "decompile", "show code", "show pseudocode", or "explain function logic".
 - `pseudocode` table (**structured/edit surface**)
   - Use for line-level filtering (`func_addr`, `ea`, `line_num`) and comment writes keyed by `ea + comment_placement`.
+  - Resolve a writable pseudocode anchor first; do not assume `ea == func_addr`.
   - Not the preferred display surface for full-function code.
 - `ctree` and `ctree_call_args` for AST-level analysis
 - `ctree_lvars` for local variable rename/type/comment updates
@@ -567,7 +568,7 @@ This keeps mutation scope explicit and predictable for both humans and agents.
 | View function disassembly | `disasm_func(addr)` or `disasm_range(start, end)` |
 | View decompiled code | `decompile(addr)` |
 | UI/screen context questions | `ui-context` skill (`get_ui_context_json()`, plugin UI only) |
-| Edit decompiler comments | `UPDATE pseudocode SET comment = '...' WHERE func_addr = X AND ea = Y` |
+| Edit decompiler comments | `Resolve writable anchor, then UPDATE pseudocode SET comment = '...' WHERE func_addr = X AND ea = Y` |
 | AST pattern matching | `ctree WHERE func_addr = X` |
 | Call patterns | `ctree_v_calls`, `disasm_calls` |
 | Control flow | `ctree_v_loops`, `ctree_v_ifs` |
