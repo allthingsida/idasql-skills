@@ -1,0 +1,4 @@
+interface:
+  display_name: "Debugger"
+  short_description: "Manage breakpoints, patches, and conditions"
+  default_prompt: "Use $debugger to inspect or edit breakpoints and patched bytes in this IDA database."

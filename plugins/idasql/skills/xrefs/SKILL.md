@@ -1,6 +1,6 @@
 ---
 name: xrefs
-description: "Analyze IDA cross-references: callers, callees, imports, data refs, grep search."
+description: "Analyze IDA cross-references: callers, callees, imports, and data refs."
 ---
 
 ---
@@ -11,9 +11,9 @@ Use this skill when user asks:
 - "Who calls this?" / "What does this call?"
 - "Where is this string/import referenced?"
 - "Show call graph dependencies."
-- "Find entities by name/pattern."
 
 Route to:
+- `grep` for candidate entity lookup by name/pattern before relationship analysis
 - `analysis` for broader triage context
 - `decompiler` for semantic interpretation after graph narrowing
 - `disassembly` for instruction-level call-site proof
@@ -158,82 +158,34 @@ FROM callees GROUP BY func_addr ORDER BY call_count DESC LIMIT 10;
 
 ## grep
 
-Structured entity-search surface.
+Use `grep` to resolve internal symbols, types, and members before doing relationship analysis. Use `imports` when the callee may exist only as an imported API.
+Canonical usage lives in `../grep/SKILL.md`.
 For canonical schema and owner mapping, see `../connect/references/schema-catalog.md` (`grep`).
 
-| Surface | Description |
-|---------|-------------|
-| `grep` table | Structured rows for composable SQL search |
-| `grep(pattern, limit, offset)` | JSON array for quick agent/tool output |
-
-Searches functions, labels, segments, structs, unions, enums, members, and enum members.
-Pattern rules:
-- Plain text = case-insensitive contains (`pattern = 'main'`)
-- `%` / `_` wildcards supported (`pattern = 'sub%'`)
-- `*` is accepted and normalized to `%`
-
 ```sql
--- Structured table search: prefix
+-- Resolve internal functions with grep
 SELECT name, kind, address
 FROM grep
-WHERE pattern = 'sub%'
-LIMIT 10;
+WHERE pattern = 'main%' AND kind = 'function'
+ORDER BY name;
 
--- Structured table search: contains
-SELECT name, kind, full_name
-FROM grep
-WHERE pattern = 'main'
-LIMIT 20;
+-- Resolve imported APIs with imports
+SELECT module, name, address
+FROM imports
+WHERE name LIKE 'CreateFile%'
+ORDER BY module, name;
 
--- JSON form with pagination
-SELECT grep('sub%', 10, 0);
-SELECT grep('sub%', 10, 10);
-
--- Parse JSON result from grep()
-SELECT json_extract(value, '$.name') as name,
-       printf('0x%llX', json_extract(value, '$.address')) as addr
-FROM json_each(grep('init', 50, 0))
-WHERE json_extract(value, '$.kind') = 'function';
+-- Then pivot into callers/callees/xrefs
+SELECT caller_name, printf('0x%X', caller_addr) AS from_addr
+FROM callers
+WHERE func_addr = (
+    SELECT address
+    FROM imports
+    WHERE name = 'CreateFileW'
+    ORDER BY name
+    LIMIT 1
+);
 ```
-
-### Entity Search Table (grep) — Full Reference
-
-The `grep` virtual table is the primary structured entity-search surface.
-
-#### Usage
-
-```sql
--- Basic search
-SELECT * FROM grep WHERE pattern = 'sub%' LIMIT 10;
-
--- Filter by kind
-SELECT * FROM grep WHERE pattern = 'EH%' AND kind = 'struct';
-
--- JOIN with other tables
-SELECT g.name, f.size
-FROM grep g
-LEFT JOIN funcs f ON g.address = f.address
-WHERE g.pattern = 'sub%' AND g.kind = 'function';
-```
-
-#### Parameters
-
-| Parameter | Description |
-|-----------|-------------|
-| `pattern` | Search pattern (required) |
-
-#### Columns
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `name` | TEXT | Entity name |
-| `kind` | TEXT | function/label/segment/struct/union/enum/member/enum_member |
-| `address` | INT | Address (for functions, labels, segments) |
-| `ordinal` | INT | Type ordinal (for types, members) |
-| `parent_name` | TEXT | Parent type (for members) |
-| `full_name` | TEXT | Fully qualified name |
-
-For JSON output instead of rows, use `grep(pattern, limit, offset)`.
 
 ---
 

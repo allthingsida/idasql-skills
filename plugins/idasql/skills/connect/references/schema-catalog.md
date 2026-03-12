@@ -26,7 +26,7 @@ Manual refresh procedure:
 | `fchunks` | virtual | disassembly | 6 | — | |
 | `fixups` | virtual | disassembly | 4 | — | |
 | `funcs` | virtual | disassembly | 13 | INSERT/UPDATE/DELETE | |
-| `grep` | virtual | xrefs | 7 | — | Requires `pattern` |
+| `grep` | virtual | grep | 7 | — | Requires `pattern` |
 | `heads` | virtual | disassembly | 5 | — | Filter by address range |
 | `hidden_ranges` | virtual | disassembly | 8 | — | |
 | `ida_info` | virtual | disassembly | 3 | — | |

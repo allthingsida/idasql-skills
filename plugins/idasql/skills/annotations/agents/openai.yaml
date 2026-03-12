@@ -1,0 +1,4 @@
+interface:
+  display_name: "Annotations"
+  short_description: "Edit comments, names, types, and bookmarks"
+  default_prompt: "Use $annotations to rename, comment, retype, and verify changes in this IDA database."

@@ -50,10 +50,27 @@ Write a concise summary describing what the function does. This makes the functi
 For exact trigger semantics (`function summary` / `func-summary` / singular `add function comment`), follow the `annotations` skill's Function Summary contract.
 
 ```sql
--- Add a function-level block comment at the function entry
+-- Resolve a writable summary anchor first (do not assume ea == func_addr)
+-- Use line_num only to inspect the candidate row; persist by ea + comment_placement.
+SELECT line_num, ea, line
+FROM pseudocode
+WHERE func_addr = 0x401000
+  AND ea != 0
+  AND TRIM(line) NOT IN ('{', '}')
+  AND ea IN (
+    SELECT ea
+    FROM pseudocode
+    WHERE func_addr = 0x401000 AND ea != 0
+    GROUP BY ea
+    HAVING COUNT(*) = 1
+  )
+ORDER BY line_num
+LIMIT 1;
+
+-- Add a function-level block comment at that resolved anchor
 UPDATE pseudocode SET comment_placement = 'block1',
        comment = 'DriverEntry: initializes driver dispatch routines and device object'
-WHERE func_addr = 0x401000 AND ea = 0x401000;
+WHERE func_addr = 0x401000 AND ea = 0x401020;
 ```
 
 ### 4. Recurse into Callees

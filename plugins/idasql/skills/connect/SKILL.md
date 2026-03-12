@@ -116,6 +116,7 @@ Use this deterministic mapping for initial routing:
 | "what does this binary do?" / triage | `analysis` | `SELECT * FROM entries;` |
 | disassembly, segments, instructions | `disassembly` | `SELECT * FROM funcs LIMIT 20;` |
 | xrefs/callers/callees/import dependencies | `xrefs` | `SELECT * FROM xrefs WHERE to_ea = ...;` |
+| find functions/types/labels/members by name pattern | `grep` | `SELECT name, kind, address FROM grep WHERE pattern = 'main' LIMIT 20;` |
 | strings/bytes/pattern search | `data` | `SELECT * FROM strings LIMIT 20;` |
 | decompile/pseudocode/ctree/lvars | `decompiler` | `SELECT decompile(0x...);` |
 | comments/renames/retyping/bookmarks | `annotations` | `SELECT ...` on target row before update |
@@ -244,7 +245,7 @@ Core decompiler surfaces:
     - Non-anchored line: `/*          */ ...` (no address anchor for that line)
   - Use this first when the user asks to "decompile", "show code", "show pseudocode", or "explain function logic".
 - `pseudocode` table (**structured/edit surface**)
-  - Use for line-level filtering (`func_addr`, `ea`, `line_num`) and comment writes.
+  - Use for line-level filtering (`func_addr`, `ea`, `line_num`) and comment writes keyed by `ea + comment_placement`.
   - Not the preferred display surface for full-function code.
 - `ctree` and `ctree_call_args` for AST-level analysis
 - `ctree_lvars` for local variable rename/type/comment updates
@@ -592,8 +593,8 @@ This keeps mutation scope explicit and predictable for both humans and agents.
 | Add enum values | `types_enum_values` (INSERT) |
 | Modify database | `funcs`, `names`, `comments`, `bookmarks` (INSERT/UPDATE/DELETE) |
 | Store custom key-value data | `netnode_kv` (full CRUD, persists in IDB) |
-| Entity search (structured) | `grep WHERE pattern = '...'` |
-| Entity search (JSON) | `grep('pattern', limit, offset)` |
+| Entity search (structured) | `grep` skill + `grep WHERE pattern = '...'` |
+| Entity search (JSON) | `grep` skill + `grep('pattern', limit, offset)` |
 
 **Remember:** Always use `func_addr = X` constraints on instruction and decompiler tables for acceptable performance.
 

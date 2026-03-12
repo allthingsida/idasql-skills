@@ -1,0 +1,4 @@
+interface:
+  display_name: "Grep"
+  short_description: "Search IDA entities with grep()"
+  default_prompt: "Use $grep to find functions, types, labels, and members by name pattern in an IDASQL database."

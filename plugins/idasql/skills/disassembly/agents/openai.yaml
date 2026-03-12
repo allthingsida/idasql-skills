@@ -1,0 +1,4 @@
+interface:
+  display_name: "Disassembly"
+  short_description: "Inspect functions, instructions, and graphs"
+  default_prompt: "Use $disassembly to inspect functions, instructions, blocks, and control flow in this IDA database."

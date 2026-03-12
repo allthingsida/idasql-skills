@@ -1,0 +1,4 @@
+interface:
+  display_name: "Types"
+  short_description: "Create and apply structs, enums, and typedefs"
+  default_prompt: "Use $types to create, modify, and apply structs, enums, unions, typedefs, and declarations."
