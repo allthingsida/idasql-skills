@@ -1,0 +1,4 @@
+interface:
+  display_name: "Analysis"
+  short_description: "Triage binaries and detect risky subsystems"
+  default_prompt: "Use $analysis to triage this IDA database and identify the most suspicious functions and subsystems."

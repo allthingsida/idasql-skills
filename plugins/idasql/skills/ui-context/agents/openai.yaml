@@ -1,0 +1,4 @@
+interface:
+  display_name: "UI Context"
+  short_description: "Capture the live IDA UI context"
+  default_prompt: "Use $ui-context to capture the live IDA screen, selection, widget focus, and address context."

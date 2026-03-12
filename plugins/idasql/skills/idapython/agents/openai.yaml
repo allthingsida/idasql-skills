@@ -1,0 +1,4 @@
+interface:
+  display_name: "IDAPython"
+  short_description: "Run IDAPython through IDASQL"
+  default_prompt: "Use $idapython to run an IDAPython snippet or file through IDASQL and capture the output."

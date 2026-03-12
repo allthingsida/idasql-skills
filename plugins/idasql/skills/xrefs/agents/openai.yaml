@@ -1,0 +1,4 @@
+interface:
+  display_name: "Xrefs"
+  short_description: "Analyze callers, callees, imports, and refs"
+  default_prompt: "Use $xrefs to analyze callers, callees, imports, and data references around this target."

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Functions"
+  short_description: "Look up IDASQL SQL function usage"
+  default_prompt: "Use $functions to look up an IDASQL SQL function signature, arguments, and usage example."

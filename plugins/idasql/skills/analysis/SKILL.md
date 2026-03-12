@@ -1,6 +1,6 @@
 ---
 name: analysis
-description: "Analyze IDA binaries: triage, security audit, crypto/network detection, multi-table queries."
+description: "Analyze IDA binaries: triage, security audit, crypto/network detection, source-vs-decompiler review, and multi-table queries."
 ---
 
 For library/framework detection patterns, see reference files:
@@ -17,6 +17,8 @@ Use this skill when user prompts sound like:
 - "Which libraries/frameworks are present?"
 - "Give me a prioritized triage plan."
 - "Show higher-level insights, not just raw rows."
+- "Compare this decompilation to source."
+- "Help make this function review-ready."
 
 Route to adjacent skills when needed:
 - Need raw caller/callee detail: `xrefs`
@@ -67,7 +69,34 @@ Interpretation guidance:
 
 1. `analysis` -> `xrefs`: map signal addresses to caller/callee graph.
 2. `analysis` -> `decompiler`: inspect semantic logic in highest-risk functions.
-3. `analysis` -> `annotations`: persist findings as comments/renames.
+3. `analysis` -> `annotations`: persist findings as comments/renames and make the decompilation review-ready.
+
+---
+
+## High-Fidelity Review Handoff
+
+When the user wants side-by-side comparison with source, or asks to "clean up" a function so it reads better, stop treating the task as read-only triage and hand off to `annotations`.
+
+Use this review probe first:
+
+```sql
+SELECT decompile(0x401000);
+SELECT idx, name, type FROM ctree_lvars WHERE func_addr = 0x401000 ORDER BY idx;
+SELECT callee_name FROM disasm_calls WHERE func_addr = 0x401000;
+```
+
+Then route to `annotations` for the edit pass. Success markers for a review-ready function are:
+- typed signature and clearer field access
+- named locals, globals, and labels
+- one heading-style summary comment near function start
+- less raw pointer math and fewer generic temp names
+
+Treat that summary comment as part of the analysis product, not just presentation polish:
+- it should support semantic search later
+- it should help whole-program understanding when many functions have already been annotated
+
+Non-goal:
+- exact source syntax. Decompiler-stable forms such as `qmemcpy(...)` can still be acceptable if names, types, and comments are correct.
 
 ---
 

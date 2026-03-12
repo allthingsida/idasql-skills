@@ -1,0 +1,4 @@
+interface:
+  display_name: "Storage"
+  short_description: "Persist analysis notes in netnode_kv"
+  default_prompt: "Use $storage to store or retrieve persistent analysis notes in netnode_kv."

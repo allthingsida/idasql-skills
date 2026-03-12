@@ -50,6 +50,8 @@ Interpretation guidance:
   - Increase specificity (`LIKE`, regex-like pattern narrowing, module/function join filters).
 - Byte pattern search too broad:
   - Restrict by range or post-filter via `func_start(...)`.
+- Need named functions, labels, structs, or members instead of string contents:
+  - Use `grep`, not `strings` or `search_bytes()`.
 
 ---
 
@@ -194,6 +196,14 @@ WHERE func_start(json_extract(value, '$.address')) IS NOT NULL;
 This is **much faster** than scanning all disassembly lines because:
 - `search_bytes()` uses native binary search
 - `func_start()` is O(1) lookup in IDA's function index
+
+---
+
+## Choose the Right Search Surface
+
+- Use `grep` for named entities such as functions, labels, structs, enums, and members.
+- Use `strings` when the user is searching literal string contents inside the binary.
+- Use `search_bytes()` when the target is a raw byte or opcode pattern.
 
 ---
 

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Decompiler"
+  short_description: "Inspect pseudocode, ctree, locals, and labels"
+  default_prompt: "Use $decompiler to inspect pseudocode, ctree state, locals, and labels for this function."

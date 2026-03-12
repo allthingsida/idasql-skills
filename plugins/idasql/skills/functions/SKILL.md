@@ -283,6 +283,8 @@ SELECT gen_schema_dot();
 
 ## Entity Search (grep)
 
+Canonical workflow guidance lives in `../grep/SKILL.md`.
+
 | Surface | Description |
 |---------|-------------|
 | `grep` table | Structured rows for composable SQL search |
@@ -291,10 +293,7 @@ SELECT gen_schema_dot();
 ```sql
 SELECT name, kind, address FROM grep WHERE pattern = 'sub%' LIMIT 10;
 SELECT grep('sub%', 10, 0);
-SELECT json_extract(value, '$.name') as name,
-       printf('0x%llX', json_extract(value, '$.address')) as addr
-FROM json_each(grep('init', 50, 0))
-WHERE json_extract(value, '$.kind') = 'function';
+SELECT grep('init');  -- defaults: limit 50, offset 0
 ```
 
 ---

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Data"
+  short_description: "Search strings, bytes, and binary patterns"
+  default_prompt: "Use $data to search strings, bytes, and raw binary patterns in this IDA database."

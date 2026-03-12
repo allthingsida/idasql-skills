@@ -1,0 +1,4 @@
+interface:
+  display_name: "Connect"
+  short_description: "Start sessions and route IDASQL workflows"
+  default_prompt: "Use $connect to start an IDASQL session, orient the database, and route me to the right analysis skill."
