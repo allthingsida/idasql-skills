@@ -98,7 +98,7 @@ Writable columns: `comment`, `comment_placement`. Placements: `semi` (after `;`)
 Anchor guidance:
 - Prefer a concrete pseudocode statement row, not a guessed function-entry row.
 - If an `ea` maps to multiple pseudocode rows (`{`, statement, `}`), resolve a unique non-brace anchor first.
-- Use `line_num` only to inspect candidate rows. Comment writes persist by `ea + comment_placement`, and shared-`ea` rows are not independently writable.
+- Use `line_num` only to inspect candidate rows. Comment writes persist by `ea + comment_placement`; shared-`ea` rows need extra care, so do not assume every displayed shared-`ea` row is independently writable.
 
 Inspect anchors before writing:
 
@@ -110,6 +110,8 @@ ORDER BY line_num;
 ```
 
 ```sql
+-- The example UPDATEs below assume 0x401020 is an already resolved writable
+-- non-brace anchor from the inspection query above; do not substitute func_addr.
 -- Edit: Add inline comment to decompiled code
 UPDATE pseudocode SET comment_placement = 'semi',
                       comment = 'buffer overflow here'
@@ -172,7 +174,23 @@ LIMIT 1;
 UPDATE pseudocode
 SET comment_placement = 'block1',
     comment = 'One-paragraph summary of what the function does, inputs/outputs, and key behavior.'
-WHERE func_addr = 0x401000 AND ea = 0x401020;
+WHERE func_addr = 0x401000
+  AND ea = (
+    SELECT ea
+    FROM pseudocode
+    WHERE func_addr = 0x401000
+      AND ea != 0
+      AND TRIM(line) NOT IN ('{', '}')
+      AND ea IN (
+        SELECT ea
+        FROM pseudocode
+        WHERE func_addr = 0x401000 AND ea != 0
+        GROUP BY ea
+        HAVING COUNT(*) = 1
+      )
+    ORDER BY line_num
+    LIMIT 1
+  );
 ```
 
 Prompt examples:
@@ -536,6 +554,7 @@ ORDER BY call_count DESC;
 
 -- Step 2: For each callee, add a block comment noting who calls it and why
 -- (repeat per callee)
+-- Resolve a writable anchor in the callee first; do not guess from the entry row.
 UPDATE pseudocode SET comment_placement = 'block1',
        comment = 'Called by init_driver to set up dispatch table'
 WHERE func_addr = 0x401050 AND ea = 0x401060;
@@ -570,6 +589,7 @@ WHERE func_addr = 0x401000
 ORDER BY line_num;
 
 -- 6. Edit: Add inline comments explaining logic
+--    Example below uses a previously resolved writable anchor from step 5.
 UPDATE pseudocode SET comment = 'validate input before processing'
 WHERE func_addr = 0x401000 AND ea = 0x401010;
 
@@ -577,7 +597,23 @@ WHERE func_addr = 0x401000 AND ea = 0x401010;
 --    First resolve a unique non-brace anchor; do not assume ea == func_addr.
 UPDATE pseudocode SET comment_placement = 'block1',
        comment = 'Processes user input buffer and validates length'
-WHERE func_addr = 0x401000 AND ea = 0x401020;
+WHERE func_addr = 0x401000
+  AND ea = (
+    SELECT ea
+    FROM pseudocode
+    WHERE func_addr = 0x401000
+      AND ea != 0
+      AND TRIM(line) NOT IN ('{', '}')
+      AND ea IN (
+        SELECT ea
+        FROM pseudocode
+        WHERE func_addr = 0x401000 AND ea != 0
+        GROUP BY ea
+        HAVING COUNT(*) = 1
+      )
+    ORDER BY line_num
+    LIMIT 1
+  );
 
 -- 8. Verify all edits
 SELECT decompile(0x401000, 1);

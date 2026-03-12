@@ -36,7 +36,14 @@ SELECT rename_lvar(0x401000, 1, 'registry_path');
 UPDATE ctree_lvars SET type = 'PDRIVER_OBJECT'
 WHERE func_addr = 0x401000 AND idx = 0;
 
+-- Inspect pseudocode anchors before writing comments
+SELECT line_num, ea, line, comment
+FROM pseudocode
+WHERE func_addr = 0x401000
+ORDER BY line_num;
+
 -- Add inline comments explaining logic
+-- Example below uses a previously resolved writable anchor, not the function entry row.
 UPDATE pseudocode SET comment = 'initialize dispatch table'
 WHERE func_addr = 0x401000 AND ea = 0x401020;
 
@@ -70,7 +77,23 @@ LIMIT 1;
 -- Add a function-level block comment at that resolved anchor
 UPDATE pseudocode SET comment_placement = 'block1',
        comment = 'DriverEntry: initializes driver dispatch routines and device object'
-WHERE func_addr = 0x401000 AND ea = 0x401020;
+WHERE func_addr = 0x401000
+  AND ea = (
+    SELECT ea
+    FROM pseudocode
+    WHERE func_addr = 0x401000
+      AND ea != 0
+      AND TRIM(line) NOT IN ('{', '}')
+      AND ea IN (
+        SELECT ea
+        FROM pseudocode
+        WHERE func_addr = 0x401000 AND ea != 0
+        GROUP BY ea
+        HAVING COUNT(*) = 1
+      )
+    ORDER BY line_num
+    LIMIT 1
+  );
 ```
 
 ### 4. Recurse into Callees
