@@ -36,7 +36,7 @@ Claude Code skills for [idasql](https://github.com/allthingsida/idasql) — a [l
 | `idapython` | Python execution via SQL | Execute IDAPython snippets and files |
 | `functions` | SQL functions reference | Look up any idasql SQL function signature |
 | `analysis` | Analysis workflows and scenarios | Security audits, library detection, advanced SQL patterns |
-| `resource` | Recursive source recovery methodology | Decompilation cleanup, structure recovery, annotation workflows |
+| `re-source` | Recursive source recovery methodology | Decompilation cleanup, structure recovery, annotation workflows |
 
 ## Links
 

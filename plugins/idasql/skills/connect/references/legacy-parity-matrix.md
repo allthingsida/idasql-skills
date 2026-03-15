@@ -15,7 +15,7 @@ This matrix tracks where legacy strengths now live in modular skills.
 | Cross-reference and call graph workflows | `xrefs` | `analysis`, `disassembly` | Preserved |
 | Decompiler mutation workflows | `decompiler` | `annotations` | Preserved |
 | Type system editing and classification | `types` | `decompiler`, `annotations` | Preserved |
-| Annotation/editing patterns | `annotations` | `resource`, `decompiler` | Preserved |
+| Annotation/editing patterns | `annotations` | `re-source`, `decompiler` | Preserved |
 | Byte/patching + breakpoints | `debugger` | `data`, `disassembly` | Preserved |
 | String and byte search workflows | `data` | `analysis`, `xrefs` | Preserved |
 | SQL function catalog and signatures | `functions` | domain skills | Preserved |

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Re-source"
+  short_description: "Recover source-level understanding recursively"
+  default_prompt: "Use $re-source to recursively re-source this binary into clearer names, comments, and types."

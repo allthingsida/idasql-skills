@@ -1,9 +1,14 @@
 ---
 name: decompiler
-description: "Decompile IDA functions: pseudocode, ctree AST, local variables, labels."
+description: "Decompile and analyze IDA functions. Use when asked for pseudocode, ctree AST analysis, local variables, labels, or decompiler-driven cleanup."
+metadata:
+  argument-hint: "[function-name or address]"
+allowed-tools:
+  - Bash
+  - Read
+  - Glob
+  - Grep
 ---
-
-> For detailed ctree node types and manipulation patterns, see: `references/ctree-manipulation.md`
 
 ---
 
@@ -103,9 +108,6 @@ Filter behavior:
 SELECT decompile(0x401000);
 
 -- COMMENTING: Use pseudocode table to add/edit/delete comments
--- The example UPDATEs below assume 0x401020 is an already resolved writable
--- non-brace anchor. Do not substitute func_addr or the first displayed row.
--- Add inline comment (appears after semicolon)
 UPDATE pseudocode SET comment_placement = 'semi',
                       comment = 'buffer overflow here'
 WHERE func_addr = 0x401000 AND ea = 0x401020;
@@ -115,16 +117,16 @@ UPDATE pseudocode SET comment_placement = 'block1', comment = 'vulnerable call'
 WHERE func_addr = 0x401000 AND ea = 0x401020;
 
 -- Delete comments at a resolved unique anchor
--- Warning: comment = NULL currently clears all placements at that ea.
 UPDATE pseudocode SET comment = NULL
 WHERE func_addr = 0x401000 AND ea = 0x401020;
-
--- STRUCTURED QUERY: Get specific lines with ea and comment info
-SELECT ea, line, comment FROM pseudocode WHERE func_addr = 0x401000;
 ```
 
+True function comments are not part of `pseudocode`:
+- use `UPDATE funcs SET comment = ... WHERE address = ...` for the regular function comment
+- use `UPDATE funcs SET rpt_comment = ... WHERE address = ...` for the repeatable function comment
+
 ### pseudocode_orphan_comments
-The `pseudocode_orphan_comments` table exposes persisted Hex-Rays comments that no longer attach to the current decompiled output. Use it to inspect or delete stale comments without guessing at UI state.
+Persisted Hex-Rays comments that no longer attach to the current decompiled output of a live function. Use it to inspect or delete stale comments.
 
 | Column | Type | Writable | Description |
 |--------|------|----------|-------------|
@@ -135,70 +137,25 @@ The `pseudocode_orphan_comments` table exposes persisted Hex-Rays comments that 
 | `orphan_comment` | TEXT | **Delete-only** | Stored orphan comment text |
 
 Rules:
-- One row = one orphaned stored comment.
 - `UPDATE ... SET orphan_comment = NULL` or `''` deletes that orphan comment.
 - Any non-empty write is rejected.
-- Always filter by `func_addr` when investigating one function.
-
-```sql
--- Inspect precise orphan comment rows for one function
-SELECT ea, comment_placement, orphan_comment
-FROM pseudocode_orphan_comments
-WHERE func_addr = 0x401000
-ORDER BY ea, comment_placement;
-
--- Delete one orphan comment exactly
-UPDATE pseudocode_orphan_comments
-SET orphan_comment = NULL
-WHERE func_addr = 0x401000
-  AND ea = 0x401020
-  AND comment_placement = 'semi';
-```
 
 ### pseudocode_v_orphan_comment_groups
-`pseudocode_v_orphan_comment_groups` is the grouped, read-only orphan triage surface. It returns one row per function with orphan comments and supports a native `func_addr` fast path.
+Grouped, read-only orphan triage surface. One row per function with orphan comments.
 
-Columns:
-- `func_addr`
-- `func_name`
-- `orphan_count`
-- `orphan_comments_json`
-
-Rules:
-- Start with `LIMIT` for cross-database triage.
-- Prefer `WHERE func_addr = ...` once you have picked a function.
-- Use this surface for review; use `pseudocode_orphan_comments` for exact deletion.
-
-```sql
-SELECT func_addr, func_name, orphan_count
-FROM pseudocode_v_orphan_comment_groups
-ORDER BY orphan_count DESC
-LIMIT 20;
-
-SELECT orphan_count, orphan_comments_json
-FROM pseudocode_v_orphan_comment_groups
-WHERE func_addr = 0x401000;
-```
+Columns: `func_addr`, `func_name`, `orphan_count`, `orphan_comments_json`
 
 ### Comment Anchor Resolution (Critical)
 
-Use this recipe before writing heading-style or function-summary comments.
+Use this recipe before writing heading-style decompiler notes.
 
 Rules:
 - Do not assume `ea == func_addr`.
 - The first displayed pseudocode row often has `ea = 0` and is not the right write target.
 - One `ea` can map to multiple rows (`{`, statement, `}`); prefer a unique non-brace anchor.
-- Use `line_num` only to inspect candidate rows. Persisted writes are keyed by `treeloc_t { ea, comment_placement }`; shared-`ea` rows need extra care, so do not assume every displayed shared-`ea` row is independently writable.
-- `annotations` owns the broader cleanup workflow; this section owns the anchor-selection rule.
-- This anchor is the canonical target for top-of-function semantic summaries used in later search and whole-program understanding.
+- For true function comments, update `funcs.comment` / `funcs.rpt_comment` instead of `pseudocode`.
 
 ```sql
--- Inspect candidate rows first
-SELECT line_num, ea, line, comment
-FROM pseudocode
-WHERE func_addr = 0x401000
-ORDER BY line_num;
-
 -- Resolve the first attachable non-brace row near function start
 SELECT line_num, ea, line
 FROM pseudocode
@@ -277,7 +234,6 @@ Local variables from decompilation.
 
 Mutation guidance:
 - Prefer `idx`-based updates for deterministic writes.
-- `name` can be empty for internal/non-display temps; treat those as potentially non-nameable.
 - `comment` updates map to Hex-Rays local-variable comments (`lv.cmt`) and appear in `decompile(...)` output.
 
 ### ctree_labels
@@ -292,48 +248,6 @@ Decompiler control-flow labels. Supports UPDATE (`name`) and mirrors label facil
 | `item_ea` | INT | R | Address of label-bearing ctree item |
 | `is_user_defined` | INT | R | 1 if name differs from default `LABEL_<n>` |
 
-Mutation guidance:
-- Treat label identity as `(func_addr, label_num)`, not by name.
-- Prefer `rename_label(...)` when you need explicit JSON result fields (`success`, `applied`, `reason`).
-- Use `UPDATE ctree_labels SET name=...` for SQL-native batch workflows.
-
-```sql
--- Inspect labels in one function
-SELECT label_num, name, item_id, printf('0x%X', item_ea) AS item_ea
-FROM ctree_labels
-WHERE func_addr = 0x401000
-ORDER BY label_num;
-
--- Inspect label metadata directly on ctree nodes
-SELECT item_id, op_name, label_num, goto_label_num
-FROM ctree
-WHERE func_addr = 0x401000
-  AND (label_num >= 0 OR goto_label_num >= 0)
-ORDER BY item_id;
-```
-
-```sql
--- No-op label rename probe (safe: preserves current name)
-WITH first_label AS (
-    SELECT func_addr, label_num, name
-    FROM ctree_labels
-    ORDER BY func_addr, label_num
-    LIMIT 1
-)
-SELECT rename_label(func_addr, label_num, name) AS result_json
-FROM first_label;
-
--- Equivalent no-op UPDATE path via writable table
-UPDATE ctree_labels
-SET name = name
-WHERE rowid IN (
-    SELECT rowid
-    FROM ctree_labels
-    ORDER BY func_addr, label_num
-    LIMIT 1
-);
-```
-
 ### ctree_call_args
 Flattened call arguments for easy querying.
 
@@ -341,14 +255,13 @@ Flattened call arguments for easy querying.
 |--------|------|-------------|
 | `func_addr` | INT | Function address |
 | `call_item_id` | INT | Call node ID |
-| `call_ea` | INT | Call-site EA used by hybrid ea+arg helpers |
-| `call_obj_name` | TEXT | Callee object name when call target is `cot_obj` |
-| `call_helper_name` | TEXT | Callee helper name when call target is `cot_helper` |
+| `call_ea` | INT | Call-site EA |
+| `call_obj_name` | TEXT | Callee object name |
+| `call_helper_name` | TEXT | Callee helper name |
 | `arg_idx` | INT | Argument index (0-based) |
-| `arg_item_id` | INT | Argument expression item ID (`ctree.item_id`) |
+| `arg_item_id` | INT | Argument expression item ID |
 | `arg_op` | TEXT | Argument type |
 | `arg_var_name` | TEXT | Variable name if applicable |
-| `arg_var_is_stk` | INT | 1=stack variable |
 | `arg_num_value` | INT | Numeric value |
 | `arg_str_value` | TEXT | String value |
 
@@ -356,13 +269,13 @@ Flattened call arguments for easy querying.
 
 ## Decompiler Views
 
-Pre-built views for common patterns:
+Pre-built views for common patterns (always filter by `func_addr`):
 
 | View | Purpose |
 |------|---------|
 | `ctree_v_calls` | Function calls with callee info |
-| `ctree_v_indirect_calls` | Indirect/dynamic call sites that benefit from call-site typing |
-| `pseudocode_v_orphan_comment_groups` | One row per function with grouped orphan comment JSON; filter by `func_addr` after triage |
+| `ctree_v_indirect_calls` | Indirect/dynamic call sites for call-site typing |
+| `pseudocode_v_orphan_comment_groups` | Grouped orphan comment triage |
 | `ctree_v_loops` | for/while/do loops |
 | `ctree_v_ifs` | if statements |
 | `ctree_v_comparisons` | Comparisons with operands |
@@ -374,60 +287,6 @@ Pre-built views for common patterns:
 | `ctree_v_leaf_funcs` | Functions with no outgoing calls |
 | `ctree_v_call_chains` | Call chain paths up to depth 10 |
 
-### ctree_v_indirect_calls
-
-Use this view to find call sites whose callee is not a direct `cot_obj` or `cot_helper`. It is the preferred discovery surface before `apply_callee_type(...)`.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `func_addr` | INT | Function address |
-| `call_item_id` | INT | Call expression item ID |
-| `call_ea` | INT | Call instruction EA |
-| `target_item_id` | INT | Callee expression item ID |
-| `target_op` | TEXT | Callee expression opcode (`cot_var`, `cot_cast`, etc.) |
-| `target_var_idx` | INT | Local-variable index when target is a variable |
-| `target_var_name` | TEXT | Local-variable name when available |
-| `call_obj_name` | TEXT | Object name when target expression still resolves to an object |
-| `call_helper_name` | TEXT | Helper name when present |
-| `arg_count` | INT | Flattened argument count from `ctree_call_args` |
-
-```sql
-SELECT call_ea, target_op, target_var_name, arg_count
-FROM ctree_v_indirect_calls
-WHERE func_addr = 0x140001BD0
-ORDER BY call_ea;
-```
-
-### ctree_v_returns
-
-Return statements with details about what's being returned.
-
-| Column | Type | Description |
-|--------|------|-------------|
-| `func_addr` | INT | Function address |
-| `item_id` | INT | Return statement item_id |
-| `ea` | INT | Address of return |
-| `return_op` | TEXT | Return value opcode (`cot_num`, `cot_var`, `cot_call`, etc.) |
-| `return_num` | INT | Numeric value (if `cot_num`) |
-| `return_str` | TEXT | String value (if `cot_str`) |
-| `return_var` | TEXT | Variable name (if `cot_var`) |
-| `returns_arg` | INT | 1 if returning a function argument |
-| `returns_call_result` | INT | 1 if returning result of another call |
-
-```sql
--- Functions that return 0
-SELECT DISTINCT func_at(func_addr) as name FROM ctree_v_returns
-WHERE return_op = 'cot_num' AND return_num = 0;
-
--- Functions that return -1 (error sentinel)
-SELECT DISTINCT func_at(func_addr) as name FROM ctree_v_returns
-WHERE return_op = 'cot_num' AND return_num = -1;
-
--- Functions that return their argument (pass-through)
-SELECT DISTINCT func_at(func_addr) as name FROM ctree_v_returns
-WHERE returns_arg = 1;
-```
-
 ---
 
 ## Type Tables and Views
@@ -436,56 +295,18 @@ For `types`, `types_members`, `types_enum_values`, `types_func_args` schemas, ty
 
 ---
 
-## Persistence and Lifecycle Semantics
-
-Writes are visible immediately within the current process, but they are not flushed to the IDB file until an explicit save path is used.
-
-**CLI mode (`idasql.exe`):**
-- Session opens one database, serves queries, then closes on exit.
-- HTTP `POST /shutdown` cleanly stops the server and closes the session.
-- Temporary unpacked IDA side files (`.id0/.id1/.id2/.nam/.til`) may appear while the DB is open and are expected to be removed on clean close.
-- Changes are not persisted by default unless you call `save_database()` or run with `-w/--write`.
-
-**Plugin mode (`idasql_plugin`):**
-- Plugin stays alive for the IDA database/plugin lifetime.
-- HTTP/MCP servers are stopped on plugin teardown/unload.
-- Plugin unload is the lifecycle boundary for final cleanup.
-
-**To persist changes explicitly:**
-```sql
-SELECT save_database();
-```
-
-`save_database()` can be costly. Prefer batching writes and saving once at an intentional boundary.
-
-**CLI flag for save-on-exit:**
-```bash
-idasql -s db.i64 -q "UPDATE funcs SET name='main' WHERE address=0x401000" -w
-```
-
-**Best practice for batch operations:**
-```sql
-UPDATE funcs SET name = 'init_config' WHERE address = 0x401000;
-UPDATE names SET name = 'g_settings' WHERE address = 0x402000;
-SELECT save_database();
-```
-
-> Agent rule: never assume writes are persisted unless `save_database()` or `-w` is explicitly used.
-
----
-
 ## SQL Functions — Decompilation
 
 **When to use `decompile()` vs `pseudocode` table:**
-- **Read/show pseudocode** → always start with `SELECT decompile(addr)`. It returns the full function as one text block with per-line prefixes (`/* <ea> */` when available, `/*          */` when no line anchor exists).
-- **Local declaration hints** → declaration lines include compact local-variable index hints (`[lv:N]`) so rename operations can target `rename_lvar(func_addr, N, new_name)` safely.
-- **Need fresh output after edits** → use `SELECT decompile(addr, 1)` to force re-decompilation.
-- **Need structured line access or comment CRUD** → query/update the `pseudocode` table.
+- **Read/show pseudocode** -> always start with `SELECT decompile(addr)`. Returns full function as one text block with per-line prefixes.
+- **Local declaration hints** -> declaration lines include compact local-variable index hints (`[lv:N]`) so rename operations can target `rename_lvar(func_addr, N, new_name)` safely.
+- **Need fresh output after edits** -> use `SELECT decompile(addr, 1)` to force re-decompilation.
+- **Need structured line access or comment CRUD** -> query/update the `pseudocode` table.
 
 | Function | Description |
 |----------|-------------|
-| `decompile(addr)` | **PREFERRED** — Full pseudocode with line prefixes (`addr` may be EA, numeric string, or symbol name; available when decompiler surfaces are enabled) |
-| `decompile(addr, 1)` | Same output but forces re-decompilation (use after writes/renames) |
+| `decompile(addr)` | **PREFERRED** -- Full pseudocode with line prefixes |
+| `decompile(addr, 1)` | Same output but forces re-decompilation |
 | `apply_callee_type(call_ea, decl)` | Apply a prototype to one call site |
 | `callee_type_at(call_ea)` | Read explicit call-site prototype when present |
 | `call_arg_addrs(call_ea)` | Read persisted argument-loader addresses as JSON |
@@ -494,9 +315,9 @@ SELECT save_database();
 | `rename_lvar_by_name(func_addr, old_name, new_name)` | Rename a local variable by existing name |
 | `rename_label(func_addr, label_num, new_name)` | Rename a decompiler label by label number |
 | `set_lvar_comment(func_addr, lvar_idx, text)` | Set local-variable comment by index |
-| `set_union_selection(func_addr, ea, path)` | Set/clear union selection path at EA (`[0,1]` or `0,1`) |
+| `set_union_selection(func_addr, ea, path)` | Set/clear union selection path at EA |
 | `set_union_selection_item(func_addr, item_id, path)` | Set/clear union selection path by `ctree.item_id` |
-| `set_union_selection_ea_arg(func_addr, ea, arg_idx, path[, callee])` | **PREFERRED** call-arg targeting helper; resolves to item id or errors with hint |
+| `set_union_selection_ea_arg(func_addr, ea, arg_idx, path[, callee])` | **PREFERRED** call-arg targeting helper |
 | `call_arg_item(func_addr, ea, arg_idx[, callee])` | Resolve call-arg coordinate to explicit `arg_item_id` |
 | `ctree_item_at(func_addr, ea[, op_name[, nth]])` | Resolve generic expression coordinate to explicit `ctree.item_id` |
 | `set_union_selection_ea_expr(func_addr, ea, path[, op_name[, nth]])` | Set/clear union selection via generic expression coordinate |
@@ -516,222 +337,6 @@ SELECT save_database();
 Targeting guidance:
 - Use `*_ea_arg` helpers for repeated callees and call-site arguments.
 - Use `ctree_item_at(..., op_name, nth)` plus `*_ea_expr` helpers for non-call expressions and assignment-side struct/union population stores.
-- When cleanup succeeds, expect recovered member paths and fewer bad casts/temp locals. Constants may still render as named objects instead of quoted literals.
-
-### Runtime Capability Profile (Do This First)
-
-Do **not** start with broad `pragma_*` discovery unless debugging the tool itself.
-Start with documented surfaces and probe availability directly:
-
-1. Baseline decompiler surface:
-```sql
-SELECT decompile(0x401000);
-```
-
-2. Baseline mutation surfaces (must exist in all supported plugin runtimes):
-```sql
-SELECT set_name(0x401000, 'my_func');
-SELECT rename_lvar(0x401000, 0, 'arg0');
-SELECT set_lvar_comment(0x401000, 0, 'seed comment');
-```
-
-3. Advanced expression/representation helpers (optional in older/minimal runtimes):
-```sql
-SELECT call_arg_item(0x401000, 0x401020, 0);
-SELECT ctree_item_at(0x401000, 0x401030, 'cot_asg', 0);
-SELECT set_union_selection_ea_expr(0x401000, 0x401030, '', 'cot_asg', 0);
-SELECT set_numform_ea_expr(0x401000, 0x401030, 0, 'clear', 'cot_asg', 0);
-```
-
-If any call returns `no such function`, treat that primitive as unavailable in this runtime and switch to fallback workflows below.
-
-### Mandatory Mutation Loop
-
-> Follow the read → edit → refresh → verify cycle defined in `connect` Global Agent Contracts.
-
-For multi-step decompiler cleanup, use this phase order:
-1. Apply structural typing first: `parse_decls`, prototypes, `ctree_lvars.type`, global types.
-2. Inspect `ctree_v_indirect_calls` for unresolved indirect call sites.
-3. Apply `apply_callee_type(call_ea, decl)` only where function/local typing is still insufficient.
-4. Refresh once with `decompile(func_addr, 1)` so the typed ctree/lvars are current.
-5. Apply rename/label/union-selection/numform/comment cleanup against the refreshed rows.
-6. Refresh and verify again.
-
-### Call-Site Typing Workflow
-
-Use call-site typing when a specific indirect call still decompiles poorly after function/global typing and `ctree_lvars.type` updates.
-
-```sql
--- 1. Find candidate indirect calls
-SELECT call_ea, target_op, target_var_name, arg_count
-FROM ctree_v_indirect_calls
-WHERE func_addr = 0x140001BD0
-ORDER BY call_ea;
-
--- 2. Apply an explicit prototype at one call site
-SELECT apply_callee_type(
-  0x140001C3E,
-  'int __fastcall emit_message(const char *name, const char *target, int flag, const char *tag);'
-);
-
--- 3. Verify persisted call metadata
-SELECT callee_type_at(0x140001C3E);
-SELECT call_arg_addrs(0x140001C3E);
-
--- 4. Refresh once after semantic typing
-SELECT decompile(0x140001BD0, 1);
-```
-
-`apply_callee_type` is a semantic typing surface. It is different from render-only helpers like `set_union_selection*` and `set_numform*`.
-
-### Local Type Seeding (Works Even In Minimal Runtimes)
-
-When advanced numform/union helpers are unavailable, aggressively improve pseudocode via local type seeding:
-
-```sql
--- Change local/arg type and optional comment
-UPDATE ctree_lvars
-SET type = 'unsigned __int64',
-    comment = 'my comment here'
-WHERE func_addr = 0x401000 AND idx = 18;
-
--- Refresh and verify effect in pseudocode
-SELECT decompile(0x401000, 1);
-SELECT idx, name, type, comment
-FROM ctree_lvars
-WHERE func_addr = 0x401000 AND idx = 18;
-```
-
-Use this to reduce noisy casts and surface meaningful field access when paired with function prototype/type improvements.
-
-### Fallback Path (When Advanced Helpers Are Missing)
-
-If `set_union_selection*` / `set_numform*` / `ctree_item_at` are unavailable:
-
-- Use `UPDATE funcs SET prototype = ...` for function-level typing.
-- Use `UPDATE ctree_lvars SET type/comment = ...` for local shaping.
-- Prefer `rename_lvar*` for local names, even in fallback flows.
-- Use `UPDATE pseudocode SET comment = ...` for stable semantic breadcrumbs.
-- Keep constants readable via comments when enum rendering primitives are unavailable.
-- Explicitly note unavailable primitives in your response so follow-up runs don't waste queries.
-
-### Full Decompiler Examples
-
-```sql
--- Decompile a function (PREFERRED way to view pseudocode)
-SELECT decompile(0x401000);
-
--- After modifying comments or variables, re-decompile to see changes
-SELECT decompile(0x401000, 1);
-
--- Get all local variables in a function
-SELECT list_lvars(0x401000);
-
--- Rename by index (canonical, deterministic)
-SELECT rename_lvar(0x401000, 2, 'buffer_size');
-
--- Rename by current name (convenience; fails if ambiguous)
-SELECT rename_lvar_by_name(0x401000, 'v2', 'buffer_size');
-
--- If you discovered the target via stack slot or another query, resolve idx first
-SELECT rename_lvar(
-  0x401000,
-  (SELECT idx
-   FROM ctree_lvars
-   WHERE func_addr = 0x401000 AND stkoff = 32
-   ORDER BY idx
-   LIMIT 1),
-  'ctx');
-
--- Set local-variable comment by index
-SELECT set_lvar_comment(0x401000, 2, 'points to decrypted buffer');
-
--- Simple current-row UPDATE path for rename
--- Prefer rename_lvar* for split/array locals or scripted cleanup
-UPDATE ctree_lvars SET name = 'buffer_size'
-WHERE func_addr = 0x401000 AND idx = 2;
-
--- Equivalent UPDATE path for comments
-UPDATE ctree_lvars SET comment = 'points to decrypted buffer'
-WHERE func_addr = 0x401000 AND idx = 2;
-
--- Fallback when direct UPDATE comment write fails on a specific lvar
--- (some runtimes can return "SQL logic error" for particular slots):
-SELECT set_lvar_comment(0x401000, 2, 'points to decrypted buffer');
-
--- Mandatory verification loop after rename
-SELECT list_lvars(0x401000);
-SELECT decompile(0x401000, 1);
-
--- Import declarations + apply prototype to improve decompilation quality
-SELECT parse_decls('
-#pragma pack(push, 1)
-typedef struct _iobuf FILE;
-typedef enum operations_e { op_empty=0, op_open=11, op_read=22, op_close=1, op_seek=2, op_read4=3 } operations_e;
-typedef struct open_t { const char* filename; const char* mode; FILE** fp; } open_t;
-typedef struct close_t { FILE* fp; } close_t;
-typedef struct read_t { FILE* fp; void* buf; unsigned __int64 size; } read_t;
-typedef struct seek_t { FILE* fp; __int64 offset; int whence; } seek_t;
-typedef struct read4_t { FILE* fp; __int64 seek; int val; } read4_t;
-typedef struct command_t { operations_e cmd_id; union { open_t open; read_t read; read4_t read4; seek_t seek; close_t close; } ops; unsigned __int64 ret; } command_t;
-#pragma pack(pop)
-');
-UPDATE funcs
-SET name = 'exec_command',
-    prototype = 'void __fastcall exec_command(command_t *cmd);'
-WHERE address = 0x140001BD0;
-SELECT decompile(0x140001BD0, 1);
-
--- Hybrid call-arg targeting (recommended): line 0x140001C3E has multiple casted args.
--- Callee is optional. If used, pass exact name from ctree_call_args
--- (for imports this is commonly "__imp_fread", not "fread").
-SELECT set_union_selection_ea_arg(0x140001BD0, 0x140001C3E, 0, '[1]');
-SELECT get_union_selection_ea_arg(0x140001BD0, 0x140001C3E, 0);
-
--- If helper returns ambiguity/no-match, resolve explicitly:
-SELECT call_item_id, arg_idx, arg_item_id, call_ea AS ea,
-       COALESCE(NULLIF(call_obj_name,''), call_helper_name, '') AS callee
-FROM ctree_call_args
-WHERE func_addr = 0x140001BD0 AND call_ea = 0x140001C3E AND arg_idx = 0
-ORDER BY call_item_id, arg_idx;
-
--- Fallback with explicit item id:
-SELECT set_union_selection_item(0x140001BD0, 42, '[1]');
-
--- Inspect persisted path
-SELECT get_union_selection_item(0x140001BD0, 42);
-
--- Clear selection
-SELECT set_union_selection_item(0x140001BD0, 42, '');
-
--- Optional bridge when you want hybrid lookup + explicit item workflow:
-SELECT call_arg_item(0x140001BD0, 0x140001C3E, 0);
-
--- Assignment-side stores often need generic expression targeting.
--- This is the right fix when a wrong union arm creates casts or temp locals.
-SELECT ctree_item_at(0x140001BD0, 0x140001C49, 'cot_asg', 0);
-SELECT set_union_selection_ea_expr(0x140001BD0, 0x140001C49, '[0]', 'cot_asg', 0);
-SELECT set_numform_ea_expr(0x140001BD0, 0x140001C49, 0, 'clear', 'cot_asg', 0);
-
--- Non-call expression workflow (e.g., comparisons/ifs):
--- 1) resolve expression item deterministically by ea + op_name + nth
-SELECT ctree_item_at(0x140001BD0, 0x140001CBB, 'cot_eq', 0);
--- 2) apply/read via generic expression helpers
-SELECT set_numform_ea_expr(0x140001BD0, 0x140001CBB, 0, 'enum:operations_e', 'cot_eq', 0);
-SELECT get_numform_ea_expr(0x140001BD0, 0x140001CBB, 0, 'cot_eq', 0);
-SELECT set_numform_ea_expr(0x140001BD0, 0x140001CBB, 0, 'clear', 'cot_eq', 0);
-
--- Assignment-style expression (not a call): target with cot_asg
-SELECT ctree_item_at(0x140001BD0, 0x140001C49, 'cot_asg', 0);
-SELECT set_union_selection_ea_expr(0x140001BD0, 0x140001C49, '', 'cot_asg', 0);
-```
-
-`rename_lvar*` functions return JSON with explicit fields:
-- `success` (execution success)
-- `applied` (observable rename applied)
-- `reason` (for non-applied cases: `not_found`, `ambiguous_name`, `unchanged`, `not_nameable`, ...)
-
-`rename_label` returns the same `success`/`applied`/`reason` contract with label-specific fields (`label_num`, `before_name`, `after_name`).
 
 ---
 
@@ -740,14 +345,13 @@ SELECT set_union_selection_ea_expr(0x140001BD0, 0x140001C49, '', 'cot_asg', 0);
 For `set_name()`, `type_at()`, `set_type()`, `parse_decls()` reference, see `types` skill.
 
 Preferred SQL write surface for function metadata:
-- `UPDATE funcs SET name = '...', prototype = '...' WHERE address = ...`
+- `UPDATE funcs SET name = '...', prototype = '...', comment = '...', rpt_comment = '...' WHERE address = ...`
 - `prototype` maps to `type_at/set_type` behavior and invalidates decompiler cache.
+- `comment` / `rpt_comment` map to `get_func_cmt()` / `set_func_cmt()`.
 
 ---
 
 ## Performance Rules
-
-Understanding table architecture helps you write fast queries:
 
 | Table | Architecture | Key Constraint | Notes |
 |-------|-------------|----------------|-------|
@@ -759,130 +363,23 @@ Understanding table architecture helps you write fast queries:
 | `ctree_call_args` | Generator | `func_addr` | Lazy streaming, respects LIMIT |
 
 **Critical rules:**
-- **ALL decompiler tables require `func_addr` constraint.** Without it, every function is decompiled — this can take minutes on large binaries.
-- Generator tables (`ctree`, `ctree_call_args`) stream rows lazily and stop at LIMIT — use `LIMIT` to cap cost.
-- Cached tables (`pseudocode`, orphan surfaces, `ctree_lvars`) are query-scoped only here: they build per-query state and do not keep static cross-query row caches.
-- Decompiler views (`ctree_v_calls`, `ctree_v_indirect_calls`, `ctree_v_loops`, etc.) inherit the `func_addr` constraint — always filter.
-- **Hex-Rays cfunc cache:** `decompile(addr)` is internally cached. `decompile(addr, 1)` forces a full re-decompilation by calling `mark_cfunc_dirty()` first — only use when you need to see effects of a mutation.
+- **ALL decompiler tables require `func_addr` constraint.** Without it, every function is decompiled.
+- Generator tables (`ctree`, `ctree_call_args`) stream rows lazily and stop at LIMIT.
+- Decompiler views (`ctree_v_calls`, `ctree_v_indirect_calls`, `ctree_v_loops`, etc.) inherit the `func_addr` constraint -- always filter.
+- **Hex-Rays cfunc cache:** `decompile(addr)` is internally cached. `decompile(addr, 1)` forces a full re-decompilation -- only use when you need to see effects of a mutation.
 
 **Cost model:**
 ```
-decompile(addr)          → ~50-200ms first call, ~0ms cached
-decompile(addr, 1)       → ~50-200ms always (forces re-decompile)
-ctree WHERE func_addr=X  → one decompilation + streaming rows
-ctree (no constraint)    → N decompilations where N = func_qty()
+decompile(addr)          -> ~50-200ms first call, ~0ms cached
+decompile(addr, 1)       -> ~50-200ms always (forces re-decompile)
+ctree WHERE func_addr=X  -> one decompilation + streaming rows
+ctree (no constraint)    -> N decompilations where N = func_qty()
 ```
 
 ---
 
-## Advanced Decompiler Patterns (CTEs)
+## Additional Resources
 
-### Functions with deeply nested control flow
-
-Find functions with the most ctree depth — indicators of complex logic, state machines, or obfuscation:
-
-```sql
--- Top 10 functions by maximum AST depth
-SELECT func_at(func_addr) AS name,
-       printf('0x%X', func_addr) AS addr,
-       MAX(depth) AS max_depth,
-       COUNT(*) AS node_count
-FROM ctree
-WHERE func_addr IN (
-    SELECT address FROM funcs ORDER BY size DESC LIMIT 50
-)
-GROUP BY func_addr
-ORDER BY max_depth DESC
-LIMIT 10;
-```
-
-### Cross-function variable type consistency
-
-Find functions where the same-named local variable has different types — sign of inconsistent annotation:
-
-```sql
--- Variables named the same but typed differently across functions
-WITH typed_vars AS (
-    SELECT func_addr, name, type
-    FROM ctree_lvars
-    WHERE func_addr IN (
-        SELECT address FROM funcs WHERE name NOT LIKE 'sub_%' LIMIT 100
-    )
-    AND name != '' AND type != ''
-)
-SELECT name, COUNT(DISTINCT type) AS type_variants,
-       GROUP_CONCAT(DISTINCT type) AS types_seen
-FROM typed_vars
-GROUP BY name
-HAVING type_variants > 1
-ORDER BY type_variants DESC
-LIMIT 20;
-```
-
-### Functions calling the same API with different argument patterns
-
-Useful for understanding API usage conventions and finding anomalies:
-
-```sql
--- How different functions call 'CreateFileW' — what patterns emerge?
-WITH call_sites AS (
-    SELECT func_addr,
-           func_at(func_addr) AS caller,
-           arg_idx,
-           arg_op,
-           arg_num_value,
-           arg_str_value,
-           arg_var_name
-    FROM ctree_call_args
-    WHERE func_addr IN (
-        SELECT DISTINCT func_addr FROM disasm_calls
-        WHERE callee_name LIKE '%CreateFile%'
-    )
-    AND call_obj_name LIKE '%CreateFile%'
-)
-SELECT caller, arg_idx,
-       arg_op, arg_num_value, arg_str_value, arg_var_name
-FROM call_sites
-ORDER BY arg_idx, caller;
-```
-
-### Decompiler-based string extraction (when strings table misses inline constants)
-
-```sql
--- String literals visible in decompiled code (catches stack strings, computed strings)
-SELECT func_at(func_addr) AS func,
-       printf('0x%X', ea) AS addr,
-       str_value
-FROM ctree
-WHERE func_addr = 0x401000
-  AND op_name = 'cot_str'
-  AND str_value IS NOT NULL;
-```
-
----
-
-## ctree Operation Names
-
-Common Hex-Rays AST node types:
-
-**Expressions (cot_*):**
-- `cot_call` - Function call
-- `cot_var` - Local variable
-- `cot_obj` - Global object/function
-- `cot_num` - Numeric constant
-- `cot_str` - String literal
-- `cot_ptr` - Pointer dereference
-- `cot_ref` - Address-of
-- `cot_asg` - Assignment
-- `cot_add`, `cot_sub`, `cot_mul`, `cot_sdiv`, `cot_udiv` - Arithmetic
-- `cot_eq`, `cot_ne`, `cot_lt`, `cot_gt` - Comparisons
-- `cot_land`, `cot_lor`, `cot_lnot` - Logical
-- `cot_band`, `cot_bor`, `cot_xor` - Bitwise
-
-**Statements (cit_*):**
-- `cit_if` - If statement
-- `cit_for` - For loop
-- `cit_while` - While loop
-- `cit_do` - Do-while loop
-- `cit_return` - Return statement
-- `cit_block` - Code block
+- For detailed workflows (capability probing, mutation loop, call-site typing, local type seeding, fallback patterns, full worked examples): [references/decompiler-workflows.md](references/decompiler-workflows.md)
+- For detailed view schemas (ctree_v_indirect_calls, ctree_v_returns): [references/decompiler-views.md](references/decompiler-views.md)
+- For ctree node types, manipulation patterns, and advanced CTEs: [references/ctree-manipulation.md](references/ctree-manipulation.md)

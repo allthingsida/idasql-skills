@@ -1,6 +1,11 @@
 ---
 name: ui-context
-description: "Capture live IDA UI context: screen, selection, widget focus, address anchors."
+description: "Capture live IDA UI context. Use when the user references what's on screen, what's selected, or asks about the current view in IDA's GUI."
+allowed-tools:
+  - Bash
+  - Read
+  - Glob
+  - Grep
 ---
 
 ---

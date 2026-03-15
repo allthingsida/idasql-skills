@@ -25,7 +25,7 @@ Manual refresh procedure:
 | `entries` | virtual | disassembly | 3 | — | |
 | `fchunks` | virtual | disassembly | 6 | — | |
 | `fixups` | virtual | disassembly | 4 | — | |
-| `funcs` | virtual | disassembly | 13 | INSERT/UPDATE/DELETE | |
+| `funcs` | virtual | disassembly | 15 | INSERT/UPDATE/DELETE | Writable: `name`, `prototype`, `comment`, `rpt_comment`, `flags` |
 | `grep` | virtual | grep | 7 | — | Requires `pattern` |
 | `heads` | virtual | disassembly | 5 | — | Filter by address range |
 | `hidden_ranges` | virtual | disassembly | 8 | — | |

@@ -1,6 +1,13 @@
 ---
 name: grep
-description: "Search named IDA entities with the grep table and grep() SQL function. Use when the user wants to find functions, labels, segments, structs, unions, enums, or members by name/pattern, choose between structured SQL rows and JSON output, or seed later xref/decompiler/type workflows from a name lookup."
+description: "Search named IDA entities by pattern. Use when asked to find functions, labels, types, or members by name, or to seed xref/decompiler workflows from a name lookup."
+metadata:
+  argument-hint: "[search-pattern]"
+allowed-tools:
+  - Bash
+  - Read
+  - Glob
+  - Grep
 ---
 
 `grep` is IDASQL's entity-search surface. Use it to discover named functions, labels, segments, structs, enums, and members before pivoting into xrefs, decompiler, or type work.

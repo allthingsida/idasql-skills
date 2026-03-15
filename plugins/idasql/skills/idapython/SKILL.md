@@ -1,6 +1,11 @@
 ---
 name: idapython
-description: "Execute IDAPython via idasql: snippets, sandbox, output capture."
+description: "Execute IDAPython via idasql. Use when SQL surfaces are insufficient and direct IDA SDK access is needed via Python snippets or scripts."
+allowed-tools:
+  - Bash
+  - Read
+  - Glob
+  - Grep
 ---
 
 ---

@@ -1,6 +1,12 @@
 ---
 name: functions
-description: "Complete idasql SQL function reference catalog."
+description: "Complete idasql SQL function reference catalog. Use when looking up function signatures, parameters, or usage examples."
+user-invocable: false
+allowed-tools:
+  - Bash
+  - Read
+  - Glob
+  - Grep
 ---
 
 This skill is a **comprehensive catalog** of every idasql SQL function. Use it to look up any function signature, parameters, and usage.

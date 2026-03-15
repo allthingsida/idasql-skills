@@ -1,6 +1,11 @@
 ---
 name: data
-description: "Query IDA strings, bytes, and binary data: search, rebuild, byte patterns."
+description: "Query IDA strings, bytes, and binary data. Use when asked to search strings, find byte patterns, rebuild string tables, or analyze binary content."
+allowed-tools:
+  - Bash
+  - Read
+  - Glob
+  - Grep
 ---
 
 ---
@@ -77,7 +82,7 @@ String literals found in the binary. IDA maintains a cached string list that can
 | `layout` | INT | String layout (0=null-terminated, 1-3=pascal) |
 | `layout_name` | TEXT | Layout name: termchr, pascal1, pascal2, pascal4 |
 | `encoding` | INT | Encoding index (0=default) |
-| `content` | TEXT | String content |
+| `content` | TEXT | String content (the actual text — not `value` or `text`) |
 
 **String Type Encoding:**
 IDA stores string type as a 32-bit value:
