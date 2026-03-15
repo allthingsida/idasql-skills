@@ -1,6 +1,11 @@
 ---
 name: storage
-description: "Persistent key-value storage in IDA databases via netnode_kv."
+description: "Persistent key-value storage in IDA databases. Use when asked to store metadata, track progress, or persist session state via netnode_kv."
+allowed-tools:
+  - Bash
+  - Read
+  - Glob
+  - Grep
 ---
 
 ---
@@ -16,7 +21,7 @@ Persistent key-value store backed by IDA netnodes. Data is saved inside the IDB 
 
 ```sql
 -- Store a value
-INSERT INTO netnode_kv(key, value) VALUES('author', 'alice');
+INSERT OR REPLACE INTO netnode_kv(key, value) VALUES('author', 'alice');
 
 -- Read by key (O(1) lookup)
 SELECT value FROM netnode_kv WHERE key = 'author';
@@ -40,7 +45,7 @@ DELETE FROM netnode_kv WHERE key = 'author';
 
 ```sql
 -- Track analysis progress
-INSERT INTO netnode_kv(key, value) VALUES('annotated_funcs', '["main","init_config"]');
+INSERT OR REPLACE INTO netnode_kv(key, value) VALUES('annotated_funcs', '["main","init_config"]');
 
 -- Update progress
 UPDATE netnode_kv SET value = '["main","init_config","process_input"]'
@@ -75,7 +80,7 @@ Store structured analysis state as JSON for richer querying:
 
 ```sql
 -- Store progress with structured metadata
-INSERT INTO netnode_kv(key, value)
+INSERT OR REPLACE INTO netnode_kv(key, value)
 VALUES('progress:overview', json_object(
     'total_funcs', (SELECT COUNT(*) FROM funcs),
     'named_funcs', (SELECT COUNT(*) FROM funcs WHERE name NOT LIKE 'sub_%'),
@@ -95,7 +100,7 @@ Track which functions have been annotated and what was done:
 
 ```sql
 -- Mark a function as annotated
-INSERT INTO netnode_kv(key, value)
+INSERT OR REPLACE INTO netnode_kv(key, value)
 VALUES('re_source:' || printf('0x%X', 0x401000),
        json_object('status', 'done', 'summary', 'DriverEntry init',
                     'analyst', 'alice', 'date', date('now')));

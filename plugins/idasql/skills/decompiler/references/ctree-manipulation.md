@@ -154,3 +154,87 @@ WHERE func_addr = 0x401000
   AND arg_idx = 0
   AND arg_var_is_stk = 1;
 ```
+
+## Advanced Decompiler Patterns (CTEs)
+
+### Functions with deeply nested control flow
+
+Find functions with the most ctree depth -- indicators of complex logic, state machines, or obfuscation:
+
+```sql
+-- Top 10 functions by maximum AST depth
+SELECT func_at(func_addr) AS name,
+       printf('0x%X', func_addr) AS addr,
+       MAX(depth) AS max_depth,
+       COUNT(*) AS node_count
+FROM ctree
+WHERE func_addr IN (
+    SELECT address FROM funcs ORDER BY size DESC LIMIT 50
+)
+GROUP BY func_addr
+ORDER BY max_depth DESC
+LIMIT 10;
+```
+
+### Cross-function variable type consistency
+
+Find functions where the same-named local variable has different types -- sign of inconsistent annotation:
+
+```sql
+-- Variables named the same but typed differently across functions
+WITH typed_vars AS (
+    SELECT func_addr, name, type
+    FROM ctree_lvars
+    WHERE func_addr IN (
+        SELECT address FROM funcs WHERE name NOT LIKE 'sub_%' LIMIT 100
+    )
+    AND name != '' AND type != ''
+)
+SELECT name, COUNT(DISTINCT type) AS type_variants,
+       GROUP_CONCAT(DISTINCT type) AS types_seen
+FROM typed_vars
+GROUP BY name
+HAVING type_variants > 1
+ORDER BY type_variants DESC
+LIMIT 20;
+```
+
+### Functions calling the same API with different argument patterns
+
+Useful for understanding API usage conventions and finding anomalies:
+
+```sql
+-- How different functions call 'CreateFileW' -- what patterns emerge?
+WITH call_sites AS (
+    SELECT func_addr,
+           func_at(func_addr) AS caller,
+           arg_idx,
+           arg_op,
+           arg_num_value,
+           arg_str_value,
+           arg_var_name
+    FROM ctree_call_args
+    WHERE func_addr IN (
+        SELECT DISTINCT func_addr FROM disasm_calls
+        WHERE callee_name LIKE '%CreateFile%'
+    )
+    AND call_obj_name LIKE '%CreateFile%'
+)
+SELECT caller, arg_idx,
+       arg_op, arg_num_value, arg_str_value, arg_var_name
+FROM call_sites
+ORDER BY arg_idx, caller;
+```
+
+### Decompiler-based string extraction (when strings table misses inline constants)
+
+```sql
+-- String literals visible in decompiled code (catches stack strings, computed strings)
+SELECT func_at(func_addr) AS func,
+       printf('0x%X', ea) AS addr,
+       str_value
+FROM ctree
+WHERE func_addr = 0x401000
+  AND op_name = 'cot_str'
+  AND str_value IS NOT NULL;
+```

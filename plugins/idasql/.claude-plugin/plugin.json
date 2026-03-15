@@ -1,6 +1,6 @@
 {
   "name": "idasql",
-  "version": "0.0.10",
+  "version": "0.0.12",
   "description": "SQL interface to IDA Pro databases for querying and CRUD operations on functions, xrefs, strings, and decompiled code",
   "author": {
     "name": "Elias Bachaalany",

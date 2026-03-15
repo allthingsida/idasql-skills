@@ -1,6 +1,13 @@
 ---
 name: xrefs
-description: "Analyze IDA cross-references: callers, callees, imports, and data refs."
+description: "Analyze IDA cross-references. Use when asked about callers, callees, imports, data refs, call graphs, or dependency chains."
+metadata:
+  argument-hint: "[function-name or address]"
+allowed-tools:
+  - Bash
+  - Read
+  - Glob
+  - Grep
 ---
 
 ---

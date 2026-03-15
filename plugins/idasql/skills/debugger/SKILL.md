@@ -1,6 +1,11 @@
 ---
 name: debugger
-description: "IDA debugger: breakpoints, byte patching, conditions, patch inventory."
+description: "IDA debugger operations. Use when asked to set breakpoints, patch bytes, add conditions, or manage a patch inventory."
+allowed-tools:
+  - Bash
+  - Read
+  - Glob
+  - Grep
 ---
 
 ---
