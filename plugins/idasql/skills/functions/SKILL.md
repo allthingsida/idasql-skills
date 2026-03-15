@@ -153,6 +153,7 @@ Address argument note: `addr`/`ea`/`func_addr` parameters accept integer EAs, nu
 Preferred SQL write surface for function metadata:
 - `UPDATE funcs SET name = '...', prototype = '...' WHERE address = ...`
 - `prototype` maps to `type_at/set_type` behavior and invalidates decompiler cache.
+- For per-call indirect-call typing, use `apply_callee_type(call_ea, decl)` from the decompiler surface.
 
 ---
 
@@ -223,6 +224,9 @@ SELECT decode_insn(0x401000);
 |----------|-------------|
 | `decompile(addr)` | **PREFERRED** — Full pseudocode with line prefixes |
 | `decompile(addr, 1)` | Force re-decompilation (use after writes/renames) |
+| `apply_callee_type(call_ea, decl)` | Apply a prototype to one indirect/dynamic call site |
+| `callee_type_at(call_ea)` | Read explicit call-site prototype when present |
+| `call_arg_addrs(call_ea)` | JSON array of persisted argument-loader instruction EAs |
 | `list_lvars(addr)` | List local variables as JSON |
 | `rename_lvar(func_addr, lvar_idx, new_name)` | Rename a local variable by index |
 | `rename_lvar_by_name(func_addr, old_name, new_name)` | Rename a local variable by existing name |

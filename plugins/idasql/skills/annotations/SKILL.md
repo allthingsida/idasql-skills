@@ -130,6 +130,38 @@ WHERE func_addr = 0x401000 AND ea = 0x401020;
 SELECT ea, line, comment FROM pseudocode WHERE func_addr = 0x401000;
 ```
 
+### Cleaning Up Orphan Decompiler Comments
+
+If the database contains stale decompiler comments that no longer attach to current pseudocode, use the orphan comment surfaces instead of trying to clear them through `pseudocode`.
+
+Read-first pattern:
+```sql
+SELECT func_addr, func_name, orphan_count
+FROM pseudocode_v_orphan_comment_groups
+ORDER BY orphan_count DESC
+LIMIT 20;
+
+SELECT ea, comment_placement, orphan_comment
+FROM pseudocode_orphan_comments
+WHERE func_addr = 0x401000
+ORDER BY ea, comment_placement;
+```
+
+Delete-only mutation pattern:
+```sql
+UPDATE pseudocode_orphan_comments
+SET orphan_comment = NULL
+WHERE func_addr = 0x401000
+  AND ea = 0x401020
+  AND comment_placement = 'semi';
+```
+
+Notes:
+- `pseudocode_orphan_comments` is delete-only.
+- Non-empty writes are rejected.
+- Use the grouped surface for triage, then the precise table for cleanup.
+- After triage, switch to `WHERE func_addr = ...` on both surfaces for the fast path.
+
 ---
 
 ## Function Summary (func-summary)
