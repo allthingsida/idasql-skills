@@ -123,6 +123,63 @@ WHERE func_addr = 0x401000 AND ea = 0x401020;
 SELECT ea, line, comment FROM pseudocode WHERE func_addr = 0x401000;
 ```
 
+### pseudocode_orphan_comments
+The `pseudocode_orphan_comments` table exposes persisted Hex-Rays comments that no longer attach to the current decompiled output. Use it to inspect or delete stale comments without guessing at UI state.
+
+| Column | Type | Writable | Description |
+|--------|------|----------|-------------|
+| `func_addr` | INT | No | Function address |
+| `func_name` | TEXT | No | Current function name for triage |
+| `ea` | INT | No | Stored orphan comment EA |
+| `comment_placement` | TEXT | No | Stored `treeloc_t.itp` placement |
+| `orphan_comment` | TEXT | **Delete-only** | Stored orphan comment text |
+
+Rules:
+- One row = one orphaned stored comment.
+- `UPDATE ... SET orphan_comment = NULL` or `''` deletes that orphan comment.
+- Any non-empty write is rejected.
+- Always filter by `func_addr` when investigating one function.
+
+```sql
+-- Inspect precise orphan comment rows for one function
+SELECT ea, comment_placement, orphan_comment
+FROM pseudocode_orphan_comments
+WHERE func_addr = 0x401000
+ORDER BY ea, comment_placement;
+
+-- Delete one orphan comment exactly
+UPDATE pseudocode_orphan_comments
+SET orphan_comment = NULL
+WHERE func_addr = 0x401000
+  AND ea = 0x401020
+  AND comment_placement = 'semi';
+```
+
+### pseudocode_v_orphan_comment_groups
+`pseudocode_v_orphan_comment_groups` is the grouped, read-only orphan triage surface. It returns one row per function with orphan comments and supports a native `func_addr` fast path.
+
+Columns:
+- `func_addr`
+- `func_name`
+- `orphan_count`
+- `orphan_comments_json`
+
+Rules:
+- Start with `LIMIT` for cross-database triage.
+- Prefer `WHERE func_addr = ...` once you have picked a function.
+- Use this surface for review; use `pseudocode_orphan_comments` for exact deletion.
+
+```sql
+SELECT func_addr, func_name, orphan_count
+FROM pseudocode_v_orphan_comment_groups
+ORDER BY orphan_count DESC
+LIMIT 20;
+
+SELECT orphan_count, orphan_comments_json
+FROM pseudocode_v_orphan_comment_groups
+WHERE func_addr = 0x401000;
+```
+
 ### Comment Anchor Resolution (Critical)
 
 Use this recipe before writing heading-style or function-summary comments.
@@ -304,6 +361,8 @@ Pre-built views for common patterns:
 | View | Purpose |
 |------|---------|
 | `ctree_v_calls` | Function calls with callee info |
+| `ctree_v_indirect_calls` | Indirect/dynamic call sites that benefit from call-site typing |
+| `pseudocode_v_orphan_comment_groups` | One row per function with grouped orphan comment JSON; filter by `func_addr` after triage |
 | `ctree_v_loops` | for/while/do loops |
 | `ctree_v_ifs` | if statements |
 | `ctree_v_comparisons` | Comparisons with operands |
@@ -314,6 +373,30 @@ Pre-built views for common patterns:
 | `ctree_v_calls_in_ifs` | Calls inside if branches (recursive) |
 | `ctree_v_leaf_funcs` | Functions with no outgoing calls |
 | `ctree_v_call_chains` | Call chain paths up to depth 10 |
+
+### ctree_v_indirect_calls
+
+Use this view to find call sites whose callee is not a direct `cot_obj` or `cot_helper`. It is the preferred discovery surface before `apply_callee_type(...)`.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `func_addr` | INT | Function address |
+| `call_item_id` | INT | Call expression item ID |
+| `call_ea` | INT | Call instruction EA |
+| `target_item_id` | INT | Callee expression item ID |
+| `target_op` | TEXT | Callee expression opcode (`cot_var`, `cot_cast`, etc.) |
+| `target_var_idx` | INT | Local-variable index when target is a variable |
+| `target_var_name` | TEXT | Local-variable name when available |
+| `call_obj_name` | TEXT | Object name when target expression still resolves to an object |
+| `call_helper_name` | TEXT | Helper name when present |
+| `arg_count` | INT | Flattened argument count from `ctree_call_args` |
+
+```sql
+SELECT call_ea, target_op, target_var_name, arg_count
+FROM ctree_v_indirect_calls
+WHERE func_addr = 0x140001BD0
+ORDER BY call_ea;
+```
 
 ### ctree_v_returns
 
@@ -403,6 +486,9 @@ SELECT save_database();
 |----------|-------------|
 | `decompile(addr)` | **PREFERRED** — Full pseudocode with line prefixes (`addr` may be EA, numeric string, or symbol name; available when decompiler surfaces are enabled) |
 | `decompile(addr, 1)` | Same output but forces re-decompilation (use after writes/renames) |
+| `apply_callee_type(call_ea, decl)` | Apply a prototype to one call site |
+| `callee_type_at(call_ea)` | Read explicit call-site prototype when present |
+| `call_arg_addrs(call_ea)` | Read persisted argument-loader addresses as JSON |
 | `list_lvars(addr)` | List local variables as JSON |
 | `rename_lvar(func_addr, lvar_idx, new_name)` | Rename a local variable by index |
 | `rename_lvar_by_name(func_addr, old_name, new_name)` | Rename a local variable by existing name |
@@ -465,9 +551,38 @@ If any call returns `no such function`, treat that primitive as unavailable in t
 
 For multi-step decompiler cleanup, use this phase order:
 1. Apply structural typing first: `parse_decls`, prototypes, `ctree_lvars.type`, global types.
-2. Refresh once with `decompile(func_addr, 1)` so the typed ctree/lvars are current.
-3. Apply rename/label/union-selection/numform/comment cleanup against the refreshed rows.
-4. Refresh and verify again.
+2. Inspect `ctree_v_indirect_calls` for unresolved indirect call sites.
+3. Apply `apply_callee_type(call_ea, decl)` only where function/local typing is still insufficient.
+4. Refresh once with `decompile(func_addr, 1)` so the typed ctree/lvars are current.
+5. Apply rename/label/union-selection/numform/comment cleanup against the refreshed rows.
+6. Refresh and verify again.
+
+### Call-Site Typing Workflow
+
+Use call-site typing when a specific indirect call still decompiles poorly after function/global typing and `ctree_lvars.type` updates.
+
+```sql
+-- 1. Find candidate indirect calls
+SELECT call_ea, target_op, target_var_name, arg_count
+FROM ctree_v_indirect_calls
+WHERE func_addr = 0x140001BD0
+ORDER BY call_ea;
+
+-- 2. Apply an explicit prototype at one call site
+SELECT apply_callee_type(
+  0x140001C3E,
+  'int __fastcall emit_message(const char *name, const char *target, int flag, const char *tag);'
+);
+
+-- 3. Verify persisted call metadata
+SELECT callee_type_at(0x140001C3E);
+SELECT call_arg_addrs(0x140001C3E);
+
+-- 4. Refresh once after semantic typing
+SELECT decompile(0x140001BD0, 1);
+```
+
+`apply_callee_type` is a semantic typing surface. It is different from render-only helpers like `set_union_selection*` and `set_numform*`.
 
 ### Local Type Seeding (Works Even In Minimal Runtimes)
 
@@ -637,6 +752,8 @@ Understanding table architecture helps you write fast queries:
 | Table | Architecture | Key Constraint | Notes |
 |-------|-------------|----------------|-------|
 | `pseudocode` | Cached | `func_addr` | Lazy per-function cache, freed after query |
+| `pseudocode_orphan_comments` | Cached | `func_addr` | Query-scoped orphan rows; writable delete-only |
+| `pseudocode_v_orphan_comment_groups` | Cached | `func_addr` | Query-scoped grouped orphan triage; start broad with `LIMIT` |
 | `ctree` | Generator | `func_addr` | Lazy streaming, never materializes full result, respects LIMIT |
 | `ctree_lvars` | Cached | `func_addr` | Lazy per-function cache, freed after query |
 | `ctree_call_args` | Generator | `func_addr` | Lazy streaming, respects LIMIT |
@@ -644,8 +761,8 @@ Understanding table architecture helps you write fast queries:
 **Critical rules:**
 - **ALL decompiler tables require `func_addr` constraint.** Without it, every function is decompiled — this can take minutes on large binaries.
 - Generator tables (`ctree`, `ctree_call_args`) stream rows lazily and stop at LIMIT — use `LIMIT` to cap cost.
-- Cached tables (`pseudocode`, `ctree_lvars`) build a per-function cache on first access, then serve from cache.
-- Decompiler views (`ctree_v_calls`, `ctree_v_loops`, etc.) inherit the `func_addr` constraint — always filter.
+- Cached tables (`pseudocode`, orphan surfaces, `ctree_lvars`) are query-scoped only here: they build per-query state and do not keep static cross-query row caches.
+- Decompiler views (`ctree_v_calls`, `ctree_v_indirect_calls`, `ctree_v_loops`, etc.) inherit the `func_addr` constraint — always filter.
 - **Hex-Rays cfunc cache:** `decompile(addr)` is internally cached. `decompile(addr, 1)` forces a full re-decompilation by calling `mark_cfunc_dirty()` first — only use when you need to see effects of a mutation.
 
 **Cost model:**

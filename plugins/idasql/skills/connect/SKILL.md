@@ -125,7 +125,7 @@ Use this deterministic mapping for initial routing:
 | persistent key/value notes | `storage` | `SELECT * FROM netnode_kv LIMIT 20;` |
 | SQL function lookup/signature recall | `functions` | `SELECT * FROM pragma_function_list;` |
 | live IDA UI context questions | `ui-context` | `SELECT get_ui_context_json();` (when available) |
-| IDA SDK-only logic not in SQL surfaces | `idapython` | `SELECT py('...');` |
+| IDA SDK-only logic not in SQL surfaces | `idapython` | `PRAGMA idasql.enable_idapython = 1; SELECT idapython_snippet('print(...)');` |
 | recursive source/structure recovery | `resource` | start from function + recurse/handoff |
 
 When prompts span domains, execute in this order:

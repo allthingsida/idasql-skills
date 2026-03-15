@@ -422,6 +422,40 @@ SELECT idx, name, type FROM ctree_lvars
 WHERE func_addr = 0x401000 AND idx = 0;
 ```
 
+### Call Sites
+
+Use call-site typing for indirect calls when function prototypes and local-variable types still leave a specific call under-typed.
+
+```sql
+-- Discover indirect call sites first
+SELECT call_ea, target_op, target_var_name, arg_count
+FROM ctree_v_indirect_calls
+WHERE func_addr = 0x140001BD0
+ORDER BY call_ea;
+
+-- Apply a prototype to one call site
+SELECT apply_callee_type(
+  0x140001C3E,
+  'int __fastcall emit_message(const char *name, const char *target, int flag, const char *tag);'
+);
+
+-- Verify the persisted call-site typing
+SELECT callee_type_at(0x140001C3E);
+SELECT call_arg_addrs(0x140001C3E);
+SELECT decompile(0x140001BD0, 1);
+```
+
+### Typing Surfaces Matrix
+
+| Surface | Scope | Semantic vs render-only | Typical use |
+|---------|-------|-------------------------|-------------|
+| `UPDATE funcs SET prototype = ...` / `set_type()` | Function/global address | Semantic | Give a function or global the right declared type |
+| `UPDATE ctree_lvars SET type = ...` | One decompiled local/arg | Semantic | Clean up local pointer/struct inference |
+| `apply_callee_type(call_ea, decl)` | One call site | Semantic | Fix an indirect call when the callee prototype must be explicit |
+| `instructions.operand*_format_spec` | One disassembly operand | Render-only | Show enums/struct offsets in listing output |
+| `set_union_selection*` | One decompiler expression | Render-only | Choose a union arm for nicer pseudocode |
+| `set_numform*` | One decompiler expression operand | Render-only | Change numeric rendering without changing base type |
+
 ### Names
 
 ```sql
@@ -458,6 +492,8 @@ WHERE address = 0x401030;
 ## Enum/Union Rendering in Decompiled Code
 
 For numform helpers (`set_numform*`) and union selection helpers (`set_union_selection*`), see `decompiler` skill.
+
+`apply_callee_type` belongs on the semantic side of the fence: it affects call analysis, unlike render-only enum/union formatting helpers.
 
 ---
 

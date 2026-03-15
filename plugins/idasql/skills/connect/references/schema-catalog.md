@@ -38,6 +38,8 @@ Manual refresh procedure:
 | `patched_bytes` | virtual | debugger | 4 | — | |
 | `problems` | virtual | disassembly | 4 | — | |
 | `pseudocode` | virtual | decompiler | 6 | UPDATE (`comment`, `comment_placement`) | Filter by `func_addr` |
+| `pseudocode_orphan_comments` | virtual | decompiler | 5 | UPDATE (`orphan_comment`, delete-only) | Filter by `func_addr` |
+| `pseudocode_v_orphan_comment_groups` | virtual | decompiler | 4 | — | Grouped orphan triage; filter by `func_addr` after `LIMIT` discovery |
 | `segments` | virtual | disassembly | 5 | INSERT/UPDATE/DELETE | |
 | `signatures` | virtual | disassembly | 4 | — | |
 | `strings` | virtual | data | 10 | — | Use `rebuild_strings()` first |
@@ -60,6 +62,7 @@ Manual refresh procedure:
 | `ctree_v_assignments` | decompiler | 11 | Filter by `func_addr` |
 | `ctree_v_call_chains` | decompiler | 3 | |
 | `ctree_v_calls` | decompiler | 8 | Filter by `func_addr` |
+| `ctree_v_indirect_calls` | decompiler | 10 | Filter by `func_addr` |
 | `ctree_v_calls_in_ifs` | decompiler | 9 | Filter by `func_addr` |
 | `ctree_v_calls_in_loops` | decompiler | 9 | Filter by `func_addr` |
 | `ctree_v_comparisons` | decompiler | 10 | Filter by `func_addr` |
