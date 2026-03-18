@@ -319,3 +319,51 @@ GROUP BY cc.root_func
 ORDER BY max_depth DESC
 LIMIT 10;
 ```
+
+For targeted traversal, prefer the `call_graph` table over `disasm_v_call_chains`:
+
+```sql
+-- Map all functions in a call subtree
+SELECT func_name, depth FROM call_graph
+WHERE start = 0x401000 AND direction = 'down' AND max_depth = 5;
+```
+
+### Trace Call Path to Target Function
+
+```sql
+-- Trace call path to an internal helper
+SELECT step, func_name FROM shortest_path
+WHERE from_addr = (SELECT address FROM funcs WHERE name = 'main')
+  AND to_addr = (SELECT address FROM funcs WHERE name = 'copy_user_input')
+  AND max_depth = 20;
+```
+
+Use `call_graph` + `disasm_calls` + `imports` when the destination is an imported
+API. `shortest_path` endpoints must resolve to functions.
+
+### Find All Strings Reachable from a Function
+
+```sql
+SELECT DISTINCT sr.string_value
+FROM call_graph cg
+JOIN string_refs sr ON sr.func_addr = cg.func_addr
+WHERE cg.start = 0x401000 AND cg.direction = 'down' AND cg.max_depth = 3;
+```
+
+### Three-Way: Strings + Imports Reachable from a Function
+
+```sql
+-- Three-way: strings + imports reachable from a function
+SELECT 'string' as kind, sr.string_value as detail, cg.func_name as via_func
+FROM call_graph cg
+JOIN string_refs sr ON sr.func_addr = cg.func_addr
+WHERE cg.start = 0x401000 AND cg.direction = 'down' AND cg.max_depth = 5
+  AND sr.string_value LIKE '%http%'
+UNION ALL
+SELECT 'import', i.name, cg.func_name
+FROM call_graph cg
+JOIN disasm_calls dc ON dc.func_addr = cg.func_addr
+JOIN imports i ON dc.callee_addr = i.address
+WHERE cg.start = 0x401000 AND cg.direction = 'down' AND cg.max_depth = 5
+ORDER BY kind, detail;
+```

@@ -73,7 +73,7 @@ Views for disassembly-level analysis (no Hex-Rays required):
 | View | Description |
 |------|-------------|
 | `disasm_v_leaf_funcs` | Functions with no outgoing calls |
-| `disasm_v_call_chains` | Call chain paths (recursive CTE) |
+| `disasm_v_call_chains` | Call chain paths (recursive CTE). For targeted traversal, prefer `call_graph` table: `SELECT * FROM call_graph WHERE start=X AND direction='down' AND max_depth=10` |
 | `disasm_v_calls_in_loops` | Calls inside loop bodies |
 | `disasm_v_funcs_with_loops` | Functions containing loops |
 

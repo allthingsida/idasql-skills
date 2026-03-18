@@ -82,6 +82,10 @@ Follow calls inside the function. Annotate each callee the same way, building un
 SELECT callee_name, printf('0x%X', callee_addr) as addr
 FROM disasm_calls WHERE func_addr = 0x401000;
 
+-- Or map the full call subtree at once (BFS with depth tracking)
+SELECT func_name, depth FROM call_graph
+WHERE start = 0x401000 AND direction = 'down' AND max_depth = 5;
+
 -- Decompile each callee
 SELECT decompile(0x401050);
 
@@ -96,6 +100,15 @@ Follow callers to build the bigger picture: how is this function used?
 -- Who calls this function?
 SELECT caller_name, printf('0x%X', caller_addr) as addr
 FROM callers WHERE func_addr = 0x401000;
+
+-- Or map ALL transitive callers at once
+SELECT func_name, depth FROM call_graph
+WHERE start = 0x401000 AND direction = 'up' AND max_depth = 10;
+
+-- Find the shortest path from an entry point to this function
+SELECT step, func_name FROM shortest_path
+WHERE from_addr = (SELECT address FROM funcs WHERE name = 'main')
+  AND to_addr = 0x401000 AND max_depth = 20;
 
 -- Decompile callers to see usage context
 SELECT decompile(0x400F00);
@@ -192,6 +205,8 @@ SELECT key, value FROM netnode_kv WHERE key LIKE 're_source:%';
 ### Transitive caller discovery
 
 Find all functions that transitively pass a struct through a chain of calls — who ultimately provides the data?
+
+> **Prefer `call_graph` for simple traversal:** `SELECT func_name, depth FROM call_graph WHERE start = 0x401000 AND direction = 'up' AND max_depth = 5` replaces the CTE below. Use the CTE only when you need to JOIN caller context (e.g. offset accesses) at each step.
 
 ```sql
 -- Recursive CTE: walk callers up to 5 levels
@@ -323,5 +338,6 @@ ORDER BY o.offset;
 - **`annotations`** — The editing/annotation workflow: how to rename, retype, comment
 - **`decompiler`** — Deep decompiler reference: ctree, types, parse_decls, union selection
 - **`types`** — Type system mechanics: struct/union/enum creation and manipulation
-- **`xrefs`** — Caller/callee traversal for cross-function analysis
+- **`xrefs`** — Caller/callee traversal, `call_graph` / `shortest_path` tables, `string_refs` view
+- **`disassembly`** — `cfg_edges` for control flow understanding during struct recovery
 - **`storage`** — netnode_kv for tracking progress across sessions
