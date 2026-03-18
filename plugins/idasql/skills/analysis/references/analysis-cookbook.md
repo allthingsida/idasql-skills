@@ -555,3 +555,63 @@ WHERE NOT EXISTS (
 )
 ORDER BY f.size DESC;
 ```
+
+---
+
+## Graph Table Recipes
+
+### Function complexity dashboard
+
+Combine CFG edges with block counts and call metrics for a complexity overview:
+
+```sql
+SELECT f.name, f.size,
+       (SELECT COUNT(*) FROM blocks b WHERE b.func_ea = f.address) as blocks,
+       (SELECT COUNT(*) FROM cfg_edges ce WHERE ce.func_ea = f.address) as edges,
+       (SELECT COUNT(*) FROM disasm_calls dc WHERE dc.func_addr = f.address) as calls_made,
+       (SELECT COUNT(*) FROM disasm_loops dl WHERE dl.func_addr = f.address) as loops
+FROM funcs f
+WHERE f.size > 32
+ORDER BY edges DESC
+LIMIT 20;
+```
+
+### Data references to globals (vulnerability hunting)
+
+Find functions that heavily reference data segments — potential targets for buffer overflow or global state corruption:
+
+```sql
+SELECT dr.from_func_name, COUNT(*) as global_refs,
+       GROUP_CONCAT(DISTINCT printf('0x%X', dr.to_addr)) as targets
+FROM data_refs dr
+JOIN segments s ON dr.to_addr BETWEEN s.start_ea AND s.end_ea
+WHERE s.class = 'DATA'
+GROUP BY dr.from_func_addr
+ORDER BY global_refs DESC
+LIMIT 20;
+```
+
+### Scattered function detection
+
+Functions with low density (code spread across a wide address range) may indicate obfuscation or code injection:
+
+```sql
+WITH per_func AS (
+    SELECT func_addr,
+           MIN(chunk_start) as span_start,
+           MAX(chunk_end) as span_end,
+           COUNT(*) as chunk_count,
+           SUM(block_count) as block_count,
+           SUM(total_size) as total_size
+    FROM function_chunks
+    GROUP BY func_addr
+)
+SELECT pf.func_addr, name_at(pf.func_addr) as func_name,
+       pf.chunk_count, pf.block_count, pf.total_size,
+       pf.span_end - pf.span_start as address_span,
+       CAST(pf.total_size AS REAL) / NULLIF(pf.span_end - pf.span_start, 0) as density
+FROM per_func pf
+WHERE pf.chunk_count > 1
+ORDER BY density ASC
+LIMIT 20;
+```

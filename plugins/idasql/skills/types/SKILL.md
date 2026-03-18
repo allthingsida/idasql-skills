@@ -295,6 +295,34 @@ Convenience views for filtering types:
 | `types_v_enums` | `SELECT * FROM types WHERE is_enum = 1` |
 | `types_v_typedefs` | `SELECT * FROM types WHERE is_typedef = 1` |
 | `types_v_funcs` | `SELECT * FROM types WHERE is_func = 1` |
+| `types_v_inheritance` | Struct/class inheritance relationships (baseclasses from `types_members`) |
+
+### `types_v_inheritance` view
+
+Shows struct/class inheritance relationships extracted from baseclass members.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `derived_ordinal` | INT | Ordinal of the derived type |
+| `derived_name` | TEXT | Name of the derived type |
+| `base_type_name` | TEXT | Name of the base type |
+| `base_ordinal` | INT | Ordinal of the base type |
+| `base_offset` | INT | Byte offset of the base within the derived type |
+
+```sql
+-- Find base classes of a type
+SELECT * FROM types_v_inheritance WHERE derived_name = 'MyClass';
+
+-- Recursive ancestors
+WITH RECURSIVE ancestors(name, depth) AS (
+    SELECT base_type_name, 1 FROM types_v_inheritance WHERE derived_name = 'MyClass'
+    UNION ALL
+    SELECT i.base_type_name, a.depth + 1
+    FROM types_v_inheritance i JOIN ancestors a ON i.derived_name = a.name
+    WHERE a.depth < 10
+)
+SELECT * FROM ancestors;
+```
 
 ---
 

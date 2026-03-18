@@ -249,6 +249,66 @@ SELECT func_at(func_ea) as name, COUNT(*) as blocks
 FROM blocks GROUP BY func_ea ORDER BY blocks DESC LIMIT 10;
 ```
 
+### cfg_edges
+
+Control flow graph edges between basic blocks. **Always use `WHERE func_ea = X`** (filter_eq pushdown, O(blocks in function)).
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `func_ea` | INT | Containing function |
+| `from_block` | INT | Source block address |
+| `to_block` | INT | Target block address |
+| `edge_type` | TEXT | `normal` (single-successor or fallback label), `true`/`false` (generic first/second arms for a two-way branch; labels follow successor order, not taken/fallthrough semantics) |
+
+```sql
+-- Get CFG structure
+SELECT * FROM cfg_edges WHERE func_ea = 0x401000;
+
+-- Find branch points (conditional blocks)
+SELECT from_block, COUNT(*) as succ_count
+FROM cfg_edges WHERE func_ea = 0x401000
+GROUP BY from_block HAVING succ_count > 1;
+
+-- Find merge points (blocks with multiple predecessors)
+SELECT to_block, COUNT(*) as pred_count
+FROM cfg_edges WHERE func_ea = 0x401000
+GROUP BY to_block HAVING pred_count > 1;
+
+-- Function complexity ranking: combine CFG, loops, and call metrics
+SELECT f.name, f.size,
+       (SELECT COUNT(*)
+        FROM (
+            SELECT ce.from_block
+            FROM cfg_edges ce
+            WHERE ce.func_ea = f.address
+            GROUP BY ce.from_block
+            HAVING COUNT(*) > 1
+        ) branch_blocks) as branch_sites,
+       (SELECT COUNT(*) FROM disasm_loops dl WHERE dl.func_addr = f.address) as loops,
+       (SELECT COUNT(*) FROM disasm_calls dc WHERE dc.func_addr = f.address) as calls_made
+FROM funcs f
+WHERE f.size > 32
+ORDER BY branch_sites DESC
+LIMIT 20;
+```
+
+### function_chunks
+
+Cached table with one row per function chunk. Aggregate by `func_addr` when you
+need function-level span or density metrics.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `func_addr` | INT | Function address |
+| `chunk_start` | INT | Chunk start address |
+| `chunk_end` | INT | Chunk end address |
+| `block_count` | INT | Number of blocks in chunk |
+| `total_size` | INT | Total size of chunk |
+
+```sql
+SELECT * FROM function_chunks WHERE func_addr = 0x401000;
+```
+
 ---
 
 ## SQL Functions -- Disassembly
@@ -366,6 +426,7 @@ SELECT gen_cfg_dot(0x401000);
 | `funcs` | Index-Based | none needed | O(1) per row via `getn_func(i)` -- always fast |
 | `instructions` | Iterator | `func_addr` | Function-item iterator (fast) vs full code-head scan (slow) |
 | `blocks` | Iterator | `func_ea` | Constraint pushdown: iterates blocks of one function |
+| `cfg_edges` | Iterator | `func_ea` | filter_eq pushdown: O(blocks in function) |
 | `disasm_calls` | Generator | `func_addr` | Lazy streaming, respects LIMIT |
 | `heads` | Iterator | address range | Can be very large -- always use address range filters |
 | `segments` | Index-Based | none needed | Small table, always fast |
@@ -383,6 +444,7 @@ funcs (full scan)            -> O(func_qty()), typically ~1000s, fast
 instructions WHERE func_addr -> O(function_size / avg_insn_size)
 instructions (no constraint) -> O(total_code_heads), potentially 100K+
 blocks WHERE func_ea         -> O(block_count_in_func), fast
+cfg_edges WHERE func_ea      -> O(block_count_in_func), fast
 disasm_calls WHERE func_addr -> O(instructions_in_func), streaming
 ```
 
