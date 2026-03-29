@@ -8,6 +8,6 @@
   },
   "homepage": "https://github.com/allthingsida/idasql",
   "repository": "https://github.com/allthingsida/idasql-skills",
-  "license": "MIT",
+  "license": "MPL-2.0",
   "keywords": ["ida", "reverse-engineering", "sql", "decompilation"]
 }
