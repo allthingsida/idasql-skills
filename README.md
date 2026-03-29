@@ -49,4 +49,4 @@ Claude Code skills for [idasql](https://github.com/allthingsida/idasql) — a [l
 
 ## License
 
-MIT
+This project and all its contents — including skill definitions, reference documentation, and configuration files — are licensed under the [Mozilla Public License 2.0](LICENSE).
