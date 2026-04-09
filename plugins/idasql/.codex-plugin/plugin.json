@@ -1,0 +1,37 @@
+{
+  "name": "idasql",
+  "version": "0.0.13",
+  "description": "SQL interface to IDA Pro databases for querying and CRUD operations on functions, xrefs, strings, and decompiled code",
+  "author": {
+    "name": "Elias Bachaalany",
+    "email": "elias.bachaalany@gmail.com",
+    "url": "https://github.com/0xeb"
+  },
+  "homepage": "https://github.com/allthingsida/idasql",
+  "repository": "https://github.com/allthingsida/idasql-skills",
+  "license": "MPL-2.0",
+  "keywords": [
+    "ida",
+    "reverse-engineering",
+    "sql",
+    "decompilation"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "IDASQL",
+    "shortDescription": "Reverse engineering skills for IDASQL-driven IDA workflows",
+    "longDescription": "Adds a namespaced IDASQL skill set for reverse engineering, decompilation, annotations, data inspection, and SQL-driven analysis inside Codex.",
+    "developerName": "Elias Bachaalany",
+    "category": "Reverse Engineering",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/allthingsida/idasql",
+    "defaultPrompt": [
+      "Start an IDASQL session and orient the database.",
+      "Trace callers and callees for this function.",
+      "Decompile this function and make it review-ready."
+    ]
+  }
+}

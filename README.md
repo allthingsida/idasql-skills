@@ -1,6 +1,6 @@
 # idasql-skills
 
-Claude Code skills for [idasql](https://github.com/allthingsida/idasql) — a [live SQL](https://github.com/0xeb/libxsql) interface to IDA Pro databases, with optional Codex app metadata layered on top.
+Claude Code and Codex plugin packaging for [idasql](https://github.com/allthingsida/idasql) — a [live SQL](https://github.com/0xeb/libxsql) interface to IDA Pro databases.
 
 ## Prerequisites
 
@@ -10,14 +10,69 @@ Claude Code skills for [idasql](https://github.com/allthingsida/idasql) — a [l
 
 ## Installation
 
+### Claude Code
+
 ```bash
 /plugin marketplace add allthingsida/idasql-skills
 ```
 
+### Codex
+
+Use the plugin packaging, not a flat copy into `~/.codex/skills`. The plugin path preserves the `idasql` namespace so generic skill names like `xrefs`, `data`, and `types` do not collide with other skills.
+
+#### Home-local install
+
+1. Clone this repo anywhere temporary:
+
+```bash
+git clone https://github.com/allthingsida/idasql-skills
+```
+
+2. Copy the plugin directory into your home plugins folder:
+
+```bash
+mkdir -p ~/plugins
+cp -R idasql-skills/plugins/idasql ~/plugins/
+```
+
+3. Create or update `~/.agents/plugins/marketplace.json` so it contains:
+
+```json
+{
+  "name": "allthingsida",
+  "interface": {
+    "displayName": "All Things IDA"
+  },
+  "plugins": [
+    {
+      "name": "idasql",
+      "source": {
+        "source": "local",
+        "path": "./plugins/idasql"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Reverse Engineering"
+    }
+  ]
+}
+```
+
+4. Restart Codex.
+
+The Codex plugin manifest lives at `plugins/idasql/.codex-plugin/plugin.json`, and the skills live under `plugins/idasql/skills/`.
+
+#### Repo-local install
+
+If you want to test directly from a checkout, keep the repo where it is and use the bundled marketplace file at `.agents/plugins/marketplace.json`. Codex should resolve `./plugins/idasql` relative to the repo root.
+
 ## Compatibility
 
 - `SKILL.md` is the canonical skill contract and remains the source of truth.
-- Codex app metadata lives in each skill's optional `agents/openai.yaml` and does not replace `SKILL.md`.
+- Per-skill Codex UI metadata lives in each skill's optional `agents/openai.yaml` and does not replace `SKILL.md`.
+- Codex plugin packaging lives alongside the Claude packaging so this repo can support both without renaming the underlying skills.
 
 ## Skills
 
@@ -37,6 +92,11 @@ Claude Code skills for [idasql](https://github.com/allthingsida/idasql) — a [l
 | `functions` | SQL functions reference | Look up any idasql SQL function signature |
 | `analysis` | Analysis workflows and scenarios | Security audits, library detection, advanced SQL patterns |
 | `re-source` | Recursive source recovery methodology | Decompilation cleanup, structure recovery, annotation workflows |
+
+## Notes
+
+- The supported Codex path is plugin-based installation. Flat installs into `~/.codex/skills` are possible, but only if you manually rename every skill with an `idasql-` prefix to avoid collisions.
+- The plugin-based layout keeps the repo’s natural `idasql` ownership model intact.
 
 ## Links
 
