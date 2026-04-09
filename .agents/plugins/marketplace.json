@@ -1,0 +1,20 @@
+{
+  "name": "allthingsida",
+  "interface": {
+    "displayName": "All Things IDA"
+  },
+  "plugins": [
+    {
+      "name": "idasql",
+      "source": {
+        "source": "local",
+        "path": "./plugins/idasql"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Reverse Engineering"
+    }
+  ]
+}
