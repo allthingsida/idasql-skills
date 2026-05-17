@@ -42,14 +42,14 @@ Return statements with details about what's being returned.
 
 ```sql
 -- Functions that return 0
-SELECT DISTINCT func_at(func_addr) as name FROM ctree_v_returns
+SELECT DISTINCT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) as name FROM ctree_v_returns
 WHERE return_op = 'cot_num' AND return_num = 0;
 
 -- Functions that return -1 (error sentinel)
-SELECT DISTINCT func_at(func_addr) as name FROM ctree_v_returns
+SELECT DISTINCT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) as name FROM ctree_v_returns
 WHERE return_op = 'cot_num' AND return_num = -1;
 
 -- Functions that return their argument (pass-through)
-SELECT DISTINCT func_at(func_addr) as name FROM ctree_v_returns
+SELECT DISTINCT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) as name FROM ctree_v_returns
 WHERE returns_arg = 1;
 ```

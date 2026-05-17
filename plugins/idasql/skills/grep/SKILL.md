@@ -20,7 +20,7 @@ Use this skill when user asks to:
 - find functions, labels, types, or members by name
 - search by prefix/substring like `sub_`, `EH`, `Zw`, `CreateFile`, or `main`
 - page through search results quickly
-- decide whether to use the `grep` table or `grep()` JSON output
+- seed table-native xref/decompiler/type workflows from name discovery
 
 Route to:
 - `xrefs` after locating a candidate callee/import/function and needing callers/callees/references
@@ -49,35 +49,23 @@ ORDER BY name;
 ```
 
 ```sql
--- 3) Use JSON when you want a quick paged payload
-SELECT grep('sub_%', 10, 0);
-SELECT grep('sub_%', 10, 10);
+-- 3) Page with ordinary SQL
+SELECT name, kind, address
+FROM grep
+WHERE pattern = 'sub_%'
+ORDER BY kind, name
+LIMIT 10 OFFSET 10;
 ```
 
 Interpretation guidance:
-- Prefer the `grep` table first when you want to filter, sort, join, or group.
-- Prefer `grep()` when you want one JSON cell for quick paging or downstream parsing.
+- `grep` is a table. Use normal SQL for filtering, sorting, joining, grouping, and paging.
+- For downstream parsing, select rows directly instead of wrapping the results in JSON.
 
 ---
 
-## Pick a Surface
+## Result Shape
 
-Use `grep` table when you need:
-- `WHERE kind = ...`
-- `ORDER BY`, `GROUP BY`, `JOIN`
-- richer follow-on SQL after discovery
-
-Use `grep()` when you need:
-- quick JSON output
-- pagination without writing a full row query
-- `json_each(...)` parsing inside one statement
-
-`grep()` accepts `grep(pattern [, limit [, offset]])`.
-Defaults:
-- `limit = 50`
-- `offset = 0`
-
-Both surfaces expose the same entity fields:
+`grep` exposes named IDA entities as rows:
 - `name`
 - `kind`
 - `address`
@@ -104,9 +92,9 @@ Common `kind` values:
 - `%` matches any substring.
 - `_` matches a single character.
 - `*` is accepted and normalized to `%`.
-- Empty pattern returns no rows from `grep` and `[]` from `grep()`.
+- Empty pattern returns no rows.
 - This is not regex.
-- This is unrelated to `search_bytes()`.
+- This is unrelated to `byte_search`.
 
 Examples:
 
@@ -187,17 +175,6 @@ ORDER BY f.size DESC
 LIMIT 20;
 ```
 
-### Parse paged JSON results from `grep()`
-
-```sql
-SELECT
-    json_extract(value, '$.name') AS name,
-    json_extract(value, '$.kind') AS kind,
-    printf('0x%llX', json_extract(value, '$.address')) AS addr
-FROM json_each(grep('init', 10, 0))
-WHERE json_extract(value, '$.kind') = 'function';
-```
-
 ### Pivot from discovery into xrefs
 
 ```sql
@@ -216,9 +193,9 @@ WHERE func_addr = (
 
 ## Compare With Other Search Surfaces
 
-- Use `grep` / `grep()` for named entities discovered by IDA.
+- Use `grep` for named entities discovered by IDA.
 - Use `strings` when you need literal string contents.
-- Use `search_bytes()` when you need raw bytes or opcode patterns.
+- Use `byte_search` when you need raw bytes or opcode patterns.
 - Use `xrefs` after discovery when the real question is "who references this?"
 
 ---
@@ -232,4 +209,4 @@ WHERE func_addr = (
 - Need to search for comments, pseudocode text, or string contents:
   `grep` is the wrong surface; pivot to `strings`, decompiler tables, or other domain tables.
 - Need bytes/opcodes:
-  use `search_bytes()` instead of `grep`.
+  use `byte_search` instead of `grep`.

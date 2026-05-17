@@ -243,19 +243,27 @@ Prompt examples:
 
 ## Editing Disassembly Comments
 
-SQL functions for editing disassembly-level comments:
+Read disassembly-level comments from the `comments` table:
 
-| Function | Description |
-|----------|-------------|
-| `comment_at(addr)` | Get comment at address |
-| `set_comment(addr, text)` | Edit/set regular comment |
-| `set_comment(addr, text, 1)` | Edit/set repeatable comment |
+```sql
+SELECT COALESCE(NULLIF(comment, ''), NULLIF(rpt_comment, '')) AS comment
+FROM comments
+WHERE address = 0x401000
+LIMIT 1;
+```
 
 The `comments` table supports INSERT, UPDATE, and DELETE:
 
 | Table | INSERT | UPDATE columns | DELETE |
 |-------|--------|---------------|--------|
 | `comments` | Yes | `comment`, `rpt_comment` | Yes |
+
+```sql
+INSERT INTO comments(address, comment) VALUES (0x401000, 'regular comment');
+INSERT INTO comments(address, rpt_comment) VALUES (0x401000, 'repeatable comment');
+UPDATE comments SET comment = 'updated comment' WHERE address = 0x401000;
+DELETE FROM comments WHERE address = 0x401000;
+```
 
 Notes:
 - `comments` edits address comments via `set_cmt()`.
@@ -295,12 +303,10 @@ For canonical schema and owner mapping, see `../connect/references/schema-catalo
 
 The `ctree_lvars` table is the editing surface for decompiler local variables. Writable columns: `name`, `type`, `comment`. For full table schema, see `decompiler` skill.
 
-Key SQL functions: `rename_lvar(func_addr, lvar_idx, new_name)`, `rename_lvar_by_name(func_addr, old_name, new_name)`, `set_lvar_comment(func_addr, lvar_idx, text)`.
-
 Local-variable edit guidance:
-- Prefer `rename_lvar*` for name changes. They are more robust for split locals, array locals, and scripted flows, and they return structured `success`/`applied`/`reason` feedback.
-- Use direct `UPDATE ctree_lvars SET type = ...` / `comment = ...` normally.
-- Treat direct `UPDATE ctree_lvars SET name = ...` as a simple current-row path after inspection, not the preferred rename primitive.
+- Inspect/select one deterministic `idx`, then update by `func_addr + idx`.
+- Use `UPDATE ctree_lvars SET name = ...`, `type = ...`, or `comment = ...` for local edits.
+- For old name-based workflows, first query the candidate rows by `func_addr + name`, choose one `idx`, then update by `idx`.
 
 ```sql
 -- Inspect current locals before renaming
@@ -310,13 +316,19 @@ WHERE func_addr = 0x401000
 ORDER BY idx;
 
 -- Edit: Rename a local variable by index (canonical, deterministic)
-SELECT rename_lvar(0x401000, 2, 'buffer_size');
+UPDATE ctree_lvars SET name = 'buffer_size' WHERE func_addr = 0x401000 AND idx = 2;
 
--- Edit: Rename by current name (convenience)
-SELECT rename_lvar_by_name(0x401000, 'v2', 'buffer_size');
+-- Edit: Rename by current name after selecting one deterministic idx
+UPDATE ctree_lvars SET name = 'buffer_size'
+WHERE func_addr = 0x401000
+  AND idx = (
+    SELECT idx FROM ctree_lvars
+    WHERE func_addr = 0x401000 AND name = 'v2'
+    ORDER BY idx LIMIT 1
+  );
 
 -- Edit: Set local-variable comment by index
-SELECT set_lvar_comment(0x401000, 2, 'points to decrypted buffer');
+UPDATE ctree_lvars SET comment = 'points to decrypted buffer' WHERE func_addr = 0x401000 AND idx = 2;
 
 -- Edit: Change variable type
 UPDATE ctree_lvars SET type = 'char *'
@@ -337,7 +349,7 @@ WHERE func_addr = 0x401000
 ORDER BY label_num;
 
 -- Rename deterministically by label number
-SELECT rename_label(0x401000, 12, 'fail');
+UPDATE ctree_labels SET name = 'fail' WHERE func_addr = 0x401000 AND label_num = 12;
 
 -- Equivalent UPDATE path
 UPDATE ctree_labels
@@ -349,7 +361,7 @@ WHERE func_addr = 0x401000 AND label_num = 12;
 
 ## Editing Types (Create, Modify, Apply)
 
-For type creation, member CRUD, enum values, `parse_decls()`, `set_type()`, and `set_name()`, see `types` skill.
+For type creation, member CRUD, enum values, `parse_decls()`, `set_type()`, and name writes via `names`/`funcs`, see `types` skill.
 
 Quick apply patterns used in annotation workflows:
 
@@ -428,8 +440,8 @@ When editing many functions or annotations, keep these costs in mind:
   -- Good: structural typing first, then refresh, then naming cleanup
   UPDATE ctree_lvars SET type = 'MY_CTX *' WHERE func_addr = 0x401000 AND idx = 0;
   SELECT decompile(0x401000, 1);
-  SELECT rename_lvar(0x401000, 0, 'ctx');
-  SELECT rename_lvar(0x401000, 1, 'size');
+  UPDATE ctree_lvars SET name = 'ctx' WHERE func_addr = 0x401000 AND idx = 0;
+  UPDATE ctree_lvars SET name = 'size' WHERE func_addr = 0x401000 AND idx = 1;
   SELECT decompile(0x401000, 1);  -- final refresh after cleanup
   ```
 - **`pseudocode` comment writes are lightweight** — they persist to IDA's user comments store without triggering re-decompilation. You can write comments to many functions without calling `decompile(addr, 1)` between each.

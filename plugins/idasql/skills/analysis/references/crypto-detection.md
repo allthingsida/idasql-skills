@@ -15,7 +15,7 @@ WHERE content LIKE '%openssl%' OR content LIKE '%libssl%'
    OR content LIKE '%libcrypto%' OR content LIKE '%-----BEGIN%';
 
 -- Functions referencing OpenSSL
-SELECT DISTINCT func_at(dc.func_addr) as func_name, dc.callee_name
+SELECT DISTINCT (SELECT name FROM funcs WHERE dc.func_addr >= address AND dc.func_addr < end_ea LIMIT 1) as func_name, dc.callee_name
 FROM disasm_calls dc
 JOIN imports i ON dc.callee_addr = i.address
 WHERE i.name LIKE '%SSL_%' OR i.name LIKE '%EVP_%'
@@ -43,10 +43,18 @@ WHERE name IN ('CryptProtectData', 'CryptUnprotectData',
 
 ```sql
 -- AES S-Box detection (common constant)
-SELECT printf('0x%X', search_first('63 7C 77 7B F2 6B 6F C5')) as aes_sbox;
+SELECT printf('0x%X', address) as aes_sbox
+FROM byte_search
+WHERE pattern = '63 7C 77 7B F2 6B 6F C5'
+ORDER BY address
+LIMIT 1;
 
 -- RSA public exponent (65537 = 0x10001)
-SELECT printf('0x%X', search_first('01 00 01 00')) as rsa_exponent;
+SELECT printf('0x%X', address) as rsa_exponent
+FROM byte_search
+WHERE pattern = '01 00 01 00'
+ORDER BY address
+LIMIT 1;
 
 -- Algorithm strings
 SELECT content, printf('0x%X', address) as addr FROM strings
@@ -68,7 +76,7 @@ crypto_strings AS (
     JOIN xrefs x ON x.to_ea = s.address
     WHERE s.content LIKE '%AES%' OR s.content LIKE '%RSA%' OR s.content LIKE '%SHA%'
 )
-SELECT func_at(func_addr) as function, detail, source
+SELECT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) as function, detail, source
 FROM (SELECT * FROM crypto_imports UNION ALL SELECT * FROM crypto_strings)
 ORDER BY function;
 ```

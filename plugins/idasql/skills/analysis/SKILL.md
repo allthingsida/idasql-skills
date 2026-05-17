@@ -127,7 +127,7 @@ SELECT content FROM strings WHERE length > 10 ORDER BY length DESC LIMIT 20;
 
 ```sql
 -- Dangerous string functions
-SELECT DISTINCT func_at(func_addr) FROM disasm_calls
+SELECT DISTINCT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) FROM disasm_calls
 WHERE callee_name IN ('strcpy', 'strcat', 'sprintf', 'gets');
 
 -- Crypto-related
@@ -156,13 +156,13 @@ SELECT name, type, size FROM ctree_lvars WHERE func_addr = 0x401000;
 SELECT callee_name FROM disasm_calls WHERE func_addr = 0x401000;
 
 -- What calls it
-SELECT func_at(from_ea) FROM xrefs WHERE to_ea = 0x401000 AND is_code = 1;
+SELECT (SELECT name FROM funcs WHERE from_ea >= address AND from_ea < end_ea LIMIT 1) FROM xrefs WHERE to_ea = 0x401000 AND is_code = 1;
 ```
 
 ### "Find all uses of a string"
 
 ```sql
-SELECT s.content, func_at(x.from_ea) as function, printf('0x%X', x.from_ea) as location
+SELECT s.content, (SELECT name FROM funcs WHERE x.from_ea >= address AND x.from_ea < end_ea LIMIT 1) as function, printf('0x%X', x.from_ea) as location
 FROM strings s
 JOIN xrefs x ON s.address = x.to_ea
 WHERE s.content LIKE '%config%';
@@ -274,7 +274,7 @@ LIMIT 10;
 ### Find Functions Calling a Specific API
 
 ```sql
-SELECT DISTINCT func_at(from_ea) as caller
+SELECT DISTINCT (SELECT name FROM funcs WHERE from_ea >= address AND from_ea < end_ea LIMIT 1) as caller
 FROM xrefs
 WHERE to_ea = (SELECT address FROM imports WHERE name = 'CreateFileW');
 ```
@@ -282,7 +282,7 @@ WHERE to_ea = (SELECT address FROM imports WHERE name = 'CreateFileW');
 ### String Cross-Reference Analysis
 
 ```sql
-SELECT s.content, func_at(x.from_ea) as used_by
+SELECT s.content, (SELECT name FROM funcs WHERE x.from_ea >= address AND x.from_ea < end_ea LIMIT 1) as used_by
 FROM strings s
 JOIN xrefs x ON s.address = x.to_ea
 WHERE s.content LIKE '%password%';
@@ -291,7 +291,7 @@ WHERE s.content LIKE '%password%';
 ### Function Complexity (by Block Count)
 
 ```sql
-SELECT func_at(func_ea) as name, COUNT(*) as block_count
+SELECT (SELECT name FROM funcs WHERE func_ea >= address AND func_ea < end_ea LIMIT 1) as name, COUNT(*) as block_count
 FROM blocks
 GROUP BY func_ea
 ORDER BY block_count DESC

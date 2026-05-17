@@ -163,7 +163,7 @@ Find functions with the most ctree depth -- indicators of complex logic, state m
 
 ```sql
 -- Top 10 functions by maximum AST depth
-SELECT func_at(func_addr) AS name,
+SELECT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) AS name,
        printf('0x%X', func_addr) AS addr,
        MAX(depth) AS max_depth,
        COUNT(*) AS node_count
@@ -207,7 +207,7 @@ Useful for understanding API usage conventions and finding anomalies:
 -- How different functions call 'CreateFileW' -- what patterns emerge?
 WITH call_sites AS (
     SELECT func_addr,
-           func_at(func_addr) AS caller,
+           (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) AS caller,
            arg_idx,
            arg_op,
            arg_num_value,
@@ -230,7 +230,7 @@ ORDER BY arg_idx, caller;
 
 ```sql
 -- String literals visible in decompiled code (catches stack strings, computed strings)
-SELECT func_at(func_addr) AS func,
+SELECT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) AS func,
        printf('0x%X', ea) AS addr,
        str_value
 FROM ctree

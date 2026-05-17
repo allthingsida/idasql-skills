@@ -210,7 +210,38 @@ SET operand1_format_spec = 'clear'
 WHERE address = 0x401020;
 ```
 
-**Performance:** `WHERE func_addr = X` uses O(function_size) iteration. Without this constraint, it scans the entire database.
+### instruction_operands
+One row per decoded non-void operand. Use this table for operand type/value details and for joinable replacements of old operand/decode helper functions.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `address` | INT | Instruction address |
+| `func_addr` | INT | Containing function |
+| `opnum` | INT | Operand index |
+| `text` | TEXT | Operand text |
+| `type_code` | INT | IDA operand type code |
+| `type_name` | TEXT | Operand type name (`reg`, `imm`, `near`, ...) |
+| `dtype` | INT | Operand dtype |
+| `reg` | INT | Register number when applicable |
+| `addr` | INT | Referenced address/displacement when applicable |
+| `raw_value` | INT | Raw operand value |
+| `value` | INT | Best-effort scalar operand value |
+
+```sql
+SELECT opnum, text, type_name, value
+FROM instruction_operands
+WHERE address = 0x401000
+ORDER BY opnum;
+
+SELECT i.address, i.itype, i.mnemonic, o.opnum, o.text, o.type_name, o.value
+FROM instructions i
+LEFT JOIN instruction_operands o
+  ON o.address = i.address AND o.func_addr = 0x401000
+WHERE i.func_addr = 0x401000
+ORDER BY i.address, o.opnum;
+```
+
+**Performance:** `WHERE address = X` decodes one instruction; `WHERE func_addr = X` uses O(function_size) iteration. Without one of these constraints, it scans the entire database.
 
 ### disasm_calls
 All call instructions with resolved targets.
@@ -224,7 +255,7 @@ All call instructions with resolved targets.
 
 ```sql
 -- Functions that call malloc
-SELECT DISTINCT func_at(func_addr) as caller
+SELECT DISTINCT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) as caller
 FROM disasm_calls WHERE callee_name LIKE '%malloc%';
 ```
 
@@ -245,7 +276,7 @@ Basic blocks within functions. **Use `func_ea` constraint for performance.**
 SELECT * FROM blocks WHERE func_ea = 0x401000;
 
 -- Functions with most basic blocks
-SELECT func_at(func_ea) as name, COUNT(*) as blocks
+SELECT (SELECT name FROM funcs WHERE func_ea >= address AND func_ea < end_ea LIMIT 1) as name, COUNT(*) as blocks
 FROM blocks GROUP BY func_ea ORDER BY blocks DESC LIMIT 10;
 ```
 
@@ -323,8 +354,6 @@ SELECT * FROM function_chunks WHERE func_addr = 0x401000;
 | `disasm_func(addr)` | Full disassembly of function containing address |
 | `make_code(addr)` | Create instruction at address (returns 1/0) |
 | `make_code_range(start, end)` | Create instructions in range, returns created count |
-| `mnemonic(addr)` | Instruction mnemonic only |
-| `operand(addr, n)` | Operand text (n=0-5) |
 
 ### Disassembly Examples
 
@@ -349,50 +378,92 @@ SELECT disasm(0x401000, 5);
 
 ## SQL Functions -- Names & Functions
 
-Address argument note: `addr`/`ea`/`func_addr` parameters accept integer EAs, numeric strings, and symbol names.
+Use table lookups for address and containing-function metadata. Resolve symbol names to integer EAs before using these patterns.
 
-| Function | Description |
-|----------|-------------|
-| `name_at(addr)` | Name at address |
-| `func_at(addr)` | Function name containing address |
-| `func_start(addr)` | Start of containing function |
-| `func_end(addr)` | End of containing function |
-| `func_qty()` | Total function count |
-| `func_at_index(n)` | Function address at index (O(1)) |
+| Pattern | Description |
+|---------|-------------|
+| `SELECT name FROM names WHERE address = :ea LIMIT 1` | Name at address |
+| `SELECT name FROM funcs WHERE :ea >= address AND :ea < end_ea LIMIT 1` | Function containing address |
+| `SELECT address FROM funcs WHERE :ea >= address AND :ea < end_ea LIMIT 1` | Start of containing function |
+| `SELECT end_ea FROM funcs WHERE :ea >= address AND :ea < end_ea LIMIT 1` | End of containing function |
+
+Function count and index lookup are table-driven:
+
+```sql
+SELECT COUNT(*) AS function_count FROM funcs;
+SELECT address FROM funcs WHERE rowid = 0;
+```
 
 ---
 
 ## SQL Functions -- Navigation
 
-| Function | Description |
-|----------|-------------|
-| `next_head(addr)` | Next defined item |
-| `prev_head(addr)` | Previous defined item |
-| `segment_at(addr)` | Segment name at address |
-| `hex(val)` | Format as hex string |
+Use `heads` ordering for defined-item navigation and SQLite formatting functions for display strings. Address equality/range filters are optimized; `ORDER BY address` or `ORDER BY address DESC` is consumed for next/previous-item lookups.
+
+```sql
+SELECT address
+FROM heads
+WHERE address > 0x401000
+ORDER BY address
+LIMIT 1;
+
+SELECT address
+FROM heads
+WHERE address < 0x401000
+ORDER BY address DESC
+LIMIT 1;
+
+SELECT printf('0x%llx', address) AS address_hex
+FROM heads
+LIMIT 10;
+```
+
+Segment lookup is table-driven:
+
+```sql
+SELECT name
+FROM segments
+WHERE 0x401000 >= start_ea
+  AND 0x401000 < end_ea
+LIMIT 1;
+```
 
 ---
 
 ## SQL Functions -- Item Analysis
 
-| Function | Description |
-|----------|-------------|
-| `item_type(addr)` | Item type flags at address |
-| `item_size(addr)` | Item size at address |
-| `is_code(addr)` | Returns 1 if address is code |
-| `is_data(addr)` | Returns 1 if address is data |
-| `flags_at(addr)` | Raw IDA flags at address |
+Use `heads` for item classification, size, and raw flags:
+
+```sql
+SELECT address, size, type, flags, disasm
+FROM heads
+WHERE address = 0x401000;
+```
 
 ---
 
 ## SQL Functions -- Instruction Details
 
-| Function | Description |
-|----------|-------------|
-| `itype(addr)` | Instruction type code (processor-specific) |
-| `decode_insn(addr)` | Full instruction info as JSON |
-| `operand_type(addr, n)` | Operand type code (o_void, o_reg, etc.) |
-| `operand_value(addr, n)` | Operand value (register num, immediate, etc.) |
+Use `instructions` and `instruction_operands` for decoded instruction facts:
+
+```sql
+SELECT address, itype, mnemonic
+FROM instructions
+WHERE func_addr = 0x401000
+LIMIT 10;
+
+SELECT opnum, text, type_code, type_name, value
+FROM instruction_operands
+WHERE address = 0x401000
+ORDER BY opnum;
+
+SELECT i.address, i.itype, i.mnemonic, i.size, o.opnum, o.text, o.type_name, o.value
+FROM instructions i
+LEFT JOIN instruction_operands o
+  ON o.address = i.address AND o.address = 0x401000
+WHERE i.address = 0x401000
+ORDER BY o.opnum;
+```
 
 ---
 
@@ -428,7 +499,8 @@ SELECT gen_cfg_dot(0x401000);
 | `blocks` | Iterator | `func_ea` | Constraint pushdown: iterates blocks of one function |
 | `cfg_edges` | Iterator | `func_ea` | filter_eq pushdown: O(blocks in function) |
 | `disasm_calls` | Generator | `func_addr` | Lazy streaming, respects LIMIT |
-| `heads` | Iterator | address range | Can be very large -- always use address range filters |
+| `heads` | Generator | `address =`, address range | Consumes `ORDER BY address` for next/previous navigation; broad scans can still be large |
+| `instruction_operands` | Iterator | `address`, `func_addr` | Address lookup decodes one instruction; function lookup iterates one function |
 | `segments` | Index-Based | none needed | Small table, always fast |
 | `names` | Iterator | none needed | Iterates IDA's name list |
 
@@ -436,16 +508,20 @@ SELECT gen_cfg_dot(0x401000);
 - `funcs` is always fast -- no constraint needed.
 - `instructions` without `func_addr` scans every code head -- use `func_addr` for per-function queries.
 - `blocks` without `func_ea` iterates all functions' flowcharts -- always constrain.
-- `heads` is the largest table in most databases. Always filter by address range.
+- `heads` is often large. Use `address = X` for item facts and address range plus `ORDER BY address [DESC] LIMIT 1` for navigation.
 
 **Cost model:**
 ```
-funcs (full scan)            -> O(func_qty()), typically ~1000s, fast
+funcs (full scan)            -> O(number of functions), typically ~1000s, fast
 instructions WHERE func_addr -> O(function_size / avg_insn_size)
 instructions (no constraint) -> O(total_code_heads), potentially 100K+
 blocks WHERE func_ea         -> O(block_count_in_func), fast
 cfg_edges WHERE func_ea      -> O(block_count_in_func), fast
 disasm_calls WHERE func_addr -> O(instructions_in_func), streaming
+heads WHERE address          -> O(1) IDA head check
+heads next/prev LIMIT 1      -> O(distance to next/previous defined head)
+instruction_operands address -> O(operands in one instruction)
+instruction_operands func    -> O(operands in one function)
 ```
 
 ---

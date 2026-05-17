@@ -58,7 +58,7 @@ WHERE dc.func_addr = 0x401000;
 
 -- Step 2: For each callee, examine what offsets it accesses
 -- This reveals fields the current function doesn't use
-SELECT func_at(func_addr) as func, num_value as offset
+SELECT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) as func, num_value as offset
 FROM ctree
 WHERE func_addr IN (0x401050, 0x401080, 0x4010B0)
   AND op_name = 'cot_add'

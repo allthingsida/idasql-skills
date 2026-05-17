@@ -299,7 +299,7 @@ For `types`, `types_members`, `types_enum_values`, `types_func_args` schemas, ty
 
 **When to use `decompile()` vs `pseudocode` table:**
 - **Read/show pseudocode** -> always start with `SELECT decompile(addr)`. Returns full function as one text block with per-line prefixes.
-- **Local declaration hints** -> declaration lines include compact local-variable index hints (`[lv:N]`) so rename operations can target `rename_lvar(func_addr, N, new_name)` safely.
+- **Local declaration hints** -> declaration lines include compact local-variable index hints (`[lv:N]`) so rename operations can target `UPDATE ctree_lvars ... WHERE func_addr = ... AND idx = N` safely.
 - **Need fresh output after edits** -> use `SELECT decompile(addr, 1)` to force re-decompilation.
 - **Need structured line access or comment CRUD** -> query/update the `pseudocode` table.
 
@@ -310,11 +310,6 @@ For `types`, `types_members`, `types_enum_values`, `types_func_args` schemas, ty
 | `apply_callee_type(call_ea, decl)` | Apply a prototype to one call site |
 | `callee_type_at(call_ea)` | Read explicit call-site prototype when present |
 | `call_arg_addrs(call_ea)` | Read persisted argument-loader addresses as JSON |
-| `list_lvars(addr)` | List local variables as JSON |
-| `rename_lvar(func_addr, lvar_idx, new_name)` | Rename a local variable by index |
-| `rename_lvar_by_name(func_addr, old_name, new_name)` | Rename a local variable by existing name |
-| `rename_label(func_addr, label_num, new_name)` | Rename a decompiler label by label number |
-| `set_lvar_comment(func_addr, lvar_idx, text)` | Set local-variable comment by index |
 | `set_union_selection(func_addr, ea, path)` | Set/clear union selection path at EA |
 | `set_union_selection_item(func_addr, item_id, path)` | Set/clear union selection path by `ctree.item_id` |
 | `set_union_selection_ea_arg(func_addr, ea, arg_idx, path[, callee])` | **PREFERRED** call-arg targeting helper |
@@ -342,7 +337,7 @@ Targeting guidance:
 
 ## SQL Functions — Modification
 
-For `set_name()`, `type_at()`, `set_type()`, `parse_decls()` reference, see `types` skill.
+For `type_at()`, `set_type()`, `parse_decls()`, and name writes via `names`/`funcs`, see `types` skill.
 
 Preferred SQL write surface for function metadata:
 - `UPDATE funcs SET name = '...', prototype = '...', comment = '...', rpt_comment = '...' WHERE address = ...`
@@ -373,7 +368,7 @@ Preferred SQL write surface for function metadata:
 decompile(addr)          -> ~50-200ms first call, ~0ms cached
 decompile(addr, 1)       -> ~50-200ms always (forces re-decompile)
 ctree WHERE func_addr=X  -> one decompilation + streaming rows
-ctree (no constraint)    -> N decompilations where N = func_qty()
+ctree (no constraint)    -> one decompilation per row in funcs
 ```
 
 ---

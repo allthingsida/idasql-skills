@@ -59,7 +59,7 @@ Interpretation guidance:
 - Full-scan query too slow:
   - Add `to_ea = X` or `from_ea = X` constraints.
 - Target unresolved by name:
-  - Resolve/verify address first (`name_at`, explicit EA literals).
+  - Resolve/verify address first through the `names` table or explicit EA literals.
 - Sparse results:
   - Pivot through `imports`, `strings`, or `disasm_calls` joins.
 
@@ -114,19 +114,19 @@ SELECT name FROM imports WHERE module LIKE '%kernel32%';
 ## Convenience Views
 
 ### callers
-Who calls each function. Uses `name_at()` scalar for caller name resolution (no JOIN needed).
+Who calls each function. Caller names are resolved by the view from the `funcs` and `names` tables.
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `func_addr` | INT | Target function address |
 | `caller_addr` | INT | Xref source address |
-| `caller_name` | TEXT | Calling function name (via `name_at()`) |
+| `caller_name` | TEXT | Calling function name |
 | `caller_func_addr` | INT | Calling function start (from `from_func`) |
 
 Underlying query:
 ```sql
 SELECT x.to_ea as func_addr, x.from_ea as caller_addr,
-       COALESCE(name_at(x.from_func), printf('sub_%X', x.from_func)) as caller_name,
+       COALESCE((SELECT name FROM names WHERE address = x.from_func LIMIT 1), printf('sub_%X', x.from_func)) as caller_name,
        x.from_func as caller_func_addr
 FROM xrefs x WHERE x.is_code = 1 AND x.from_func != 0
 ```
@@ -147,9 +147,9 @@ What each function calls. Inverse of callers view. Uses `from_func` for efficien
 | Column | Type | Description |
 |--------|------|-------------|
 | `func_addr` | INT | Calling function address (from `from_func`) |
-| `func_name` | TEXT | Calling function name (via `name_at()`) |
+| `func_name` | TEXT | Calling function name |
 | `callee_addr` | INT | Called address |
-| `callee_name` | TEXT | Called function/symbol name (via `name_at()`) |
+| `callee_name` | TEXT | Called function/symbol name |
 
 ```sql
 -- What does main call?
@@ -297,12 +297,24 @@ Performance: Bidirectional BFS. O(b^(d/2)) where b is branching factor and d is 
 
 ---
 
-## SQL Functions — Cross-References
+## Table-First Cross-Reference Queries
 
-| Function | Description |
-|----------|-------------|
-| `xrefs_to(addr)` | JSON array of xrefs TO address |
-| `xrefs_from(addr)` | JSON array of xrefs FROM address |
+```sql
+-- Incoming references to an address
+SELECT from_ea, to_ea, type, is_code, from_func
+FROM xrefs
+WHERE to_ea = 0x401000;
+
+-- Exact outgoing references from an item address
+SELECT from_ea, to_ea, type, is_code, from_func
+FROM xrefs
+WHERE from_ea = 0x401000;
+
+-- Outgoing references from anywhere inside a function
+SELECT from_ea, to_ea, type, is_code, from_func
+FROM xrefs
+WHERE from_func = 0x401000;
+```
 
 ---
 
@@ -387,7 +399,7 @@ LIMIT 10;
 ### Find Functions Calling a Specific API
 
 ```sql
-SELECT DISTINCT func_at(from_ea) as caller
+SELECT DISTINCT (SELECT name FROM funcs WHERE from_ea >= address AND from_ea < end_ea LIMIT 1) as caller
 FROM xrefs
 WHERE to_ea = (SELECT address FROM imports WHERE name = 'CreateFileW');
 ```
@@ -395,7 +407,7 @@ WHERE to_ea = (SELECT address FROM imports WHERE name = 'CreateFileW');
 ### String Cross-Reference Analysis
 
 ```sql
-SELECT s.content, func_at(x.from_ea) as used_by
+SELECT s.content, (SELECT name FROM funcs WHERE x.from_ea >= address AND x.from_ea < end_ea LIMIT 1) as used_by
 FROM strings s
 JOIN xrefs x ON s.address = x.to_ea
 WHERE s.content LIKE '%password%';
@@ -512,7 +524,7 @@ WITH RECURSIVE callers_cte AS (
     JOIN disasm_calls dc ON dc.callee_addr = c.func_addr
     WHERE c.depth < 5
 )
-SELECT func_at(func_addr) as caller, MIN(depth) as distance
+SELECT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) as caller, MIN(depth) as distance
 FROM callers_cte
 GROUP BY func_addr
 ORDER BY distance, caller;

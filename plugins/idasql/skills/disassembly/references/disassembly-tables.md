@@ -15,7 +15,7 @@ Function chunks (for functions with non-contiguous code, like exception handlers
 
 ```sql
 -- Functions with multiple chunks (complex control flow)
-SELECT func_at(owner) as name, COUNT(*) as chunks
+SELECT (SELECT name FROM funcs WHERE owner >= address AND owner < end_ea LIMIT 1) as name, COUNT(*) as chunks
 FROM fchunks GROUP BY owner HAVING chunks > 1;
 ```
 
@@ -27,13 +27,15 @@ All defined items (code/data heads) in the database.
 |--------|------|-------------|
 | `address` | INT | Head address |
 | `size` | INT | Item size |
+| `type` | TEXT | Item type (`code`, `data`, `string`, etc.) |
 | `flags` | INT | IDA flags |
 
-**Performance:** This table can be very large. Always use address range filters.
+**Performance:** `WHERE address = X` and address range filters are optimized. Next/previous navigation should use `ORDER BY address [DESC] LIMIT 1`; broad scans can still be large.
 
 ## bytes
 
-Byte-level read/write table for patching and physical-offset mapping.
+Pure mapped-byte read/write table for patching and physical-offset mapping.
+Use `heads` for IDA item size/type metadata; `bytes` includes item-tail bytes.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -44,10 +46,18 @@ Byte-level read/write table for patching and physical-offset mapping.
 | `fpos` | INT | Physical/input file offset (NULL when unmapped) |
 
 ```sql
--- Inspect EA + physical offset mapping
+-- Inspect EA + physical offset mapping over a tight byte range
 SELECT printf('0x%X', ea) AS ea, fpos, value
 FROM bytes
-WHERE ea BETWEEN 0x401000 AND 0x401020;
+WHERE ea >= 0x401000 AND ea < 0x401020
+ORDER BY ea;
+
+-- Add item metadata when the byte is also an item head
+SELECT b.ea, b.value, h.size, h.type
+FROM bytes b
+LEFT JOIN heads h ON h.address = b.ea
+WHERE b.ea >= 0x401000 AND b.ea < 0x401020
+ORDER BY b.ea;
 
 -- Join current bytes with patch inventory offsets
 SELECT b.ea, b.fpos, p.original_value, p.patched_value
@@ -82,7 +92,7 @@ Views for disassembly-level analysis (no Hex-Rays required):
 SELECT * FROM disasm_v_leaf_funcs LIMIT 10;
 
 -- Find hotspot calls (inside loops)
-SELECT func_at(func_addr) as func, callee_name
+SELECT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) as func, callee_name
 FROM disasm_v_calls_in_loops;
 ```
 
