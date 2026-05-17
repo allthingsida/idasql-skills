@@ -126,21 +126,32 @@ JOIN funcs f ON b.address >= f.address AND b.address < f.end_ea;
 
 ## bytes (Byte Patching)
 
-Byte-wise program view with patch support.
+Pure mapped-byte program view with patch support. This table is one row per
+mapped byte address; IDA item metadata such as size/type belongs to `heads`.
 
 | Column | Type | RW | Description |
 |--------|------|----|-------------|
-| `ea` | INT | R | Address |
+| `ea` | INT | R | Byte address |
 | `value` | INT | RW | Current byte value (UPDATE patches byte) |
 | `original_value` | INT | R | Original byte value before patch |
-| `size` | INT | R | Item size at address |
-| `type` | TEXT | R | Item type (`code`, `data`, etc.) |
 | `is_patched` | INT | R | 1 if byte differs from original |
+| `fpos` | INT | R | Physical/input file offset (NULL when unavailable) |
 
 ```sql
 -- Read one address
 SELECT ea, value, original_value, is_patched
 FROM bytes WHERE ea = 0x401000;
+
+-- Read a byte range, including item-tail bytes
+SELECT ea, value
+FROM bytes
+WHERE ea >= 0x401000 AND ea < 0x401010
+ORDER BY ea;
+
+-- Get item metadata separately
+SELECT address, size, type, flags, disasm
+FROM heads
+WHERE address = 0x401000;
 
 -- Patch via table update
 UPDATE bytes SET value = 0x90 WHERE ea = 0x401000;
@@ -179,7 +190,7 @@ ORDER BY ea;
 
 | Function | Description |
 |----------|-------------|
-| `bytes(addr, n)` | Read `n` bytes as hex string |
+| `bytes(addr, n)` | Read `n` raw bytes as hex string |
 | `bytes_raw(addr, n)` | Read `n` bytes as BLOB |
 | `load_file_bytes(path, file_offset, address, size[, patchable])` | Load patch bytes from a host file into memory/file image |
 | `patch_byte(addr, val)` | Patch one byte at `addr` (returns 1/0) |
@@ -261,7 +272,7 @@ Find and neutralize `IsDebuggerPresent` checks:
 
 ```sql
 -- Find calls to IsDebuggerPresent
-SELECT dc.ea, func_at(dc.func_addr) AS func_name,
+SELECT dc.ea, (SELECT name FROM funcs WHERE dc.func_addr >= address AND dc.func_addr < end_ea LIMIT 1) AS func_name,
        disasm_at(dc.ea, 2) AS context
 FROM disasm_calls dc
 WHERE dc.callee_name LIKE '%IsDebuggerPresent%';
@@ -279,7 +290,7 @@ SELECT patch_byte(0x401036, 0x90);
 ```sql
 -- Full patch report: what was changed and where
 SELECT printf('0x%X', ea) AS address,
-       func_at(ea) AS func_name,
+       (SELECT name FROM funcs WHERE ea >= address AND ea < end_ea LIMIT 1) AS func_name,
        printf('0x%02X', original_value) AS original,
        printf('0x%02X', patched_value) AS patched,
        disasm_at(ea) AS context
@@ -294,9 +305,9 @@ ORDER BY ea;
 | Table | Size | Constraint | Notes |
 |-------|------|-----------|-------|
 | `breakpoints` | Small (<100 typical) | none needed | Always fast |
-| `bytes` | Entire address space | `ea` | **Critical** — without `ea` constraint, iterates entire address space |
+| `bytes` | All mapped bytes | `ea` | **Critical** — constrain to one address or a tight range |
 | `patched_bytes` | Small (patch count) | none needed | Scans all patches, usually tiny |
 
 - `breakpoints` table is small — full scans are fine.
-- `bytes` table maps the entire virtual address space. **Never query without `WHERE ea = X`** or a tight address range.
+- `bytes` table emits one row per mapped byte. Use `WHERE ea = X` or a tight `ea` range.
 - `patched_bytes` iterates only patched locations — always fast.

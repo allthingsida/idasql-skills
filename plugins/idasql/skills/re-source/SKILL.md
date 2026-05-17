@@ -36,8 +36,8 @@ Use the `annotations` skill to edit the decompilation into something readable:
 
 ```sql
 -- Rename local variables to meaningful names
-SELECT rename_lvar(0x401000, 0, 'driver_object');
-SELECT rename_lvar(0x401000, 1, 'registry_path');
+UPDATE ctree_lvars SET name = 'driver_object' WHERE func_addr = 0x401000 AND idx = 0;
+UPDATE ctree_lvars SET name = 'registry_path' WHERE func_addr = 0x401000 AND idx = 1;
 
 -- Apply types to arguments/locals
 UPDATE ctree_lvars SET type = 'PDRIVER_OBJECT'
@@ -135,7 +135,7 @@ FROM ctree WHERE func_addr = 0x401000
 **b) Cross-function correlation — find more fields:**
 ```sql
 -- Find all callers that pass the same struct pointer
-SELECT DISTINCT func_at(dc.func_addr) as caller
+SELECT DISTINCT (SELECT name FROM funcs WHERE dc.func_addr >= address AND dc.func_addr < end_ea LIMIT 1) as caller
 FROM disasm_calls dc
 WHERE dc.callee_addr = 0x401000;
 
@@ -247,7 +247,7 @@ WITH callers_of AS (
 ),
 offset_accesses AS (
     SELECT func_addr,
-           func_at(func_addr) AS func_name,
+           (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) AS func_name,
            num_value AS field_offset,
            op_name
     FROM ctree
@@ -282,7 +282,7 @@ WITH offset_funcs AS (
       AND num_value BETWEEN 1 AND 0x1000
     GROUP BY func_addr
 )
-SELECT func_at(func_addr) AS name,
+SELECT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) AS name,
        printf('0x%X', func_addr) AS addr,
        offset_accesses,
        unique_offsets

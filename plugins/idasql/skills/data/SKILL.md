@@ -28,7 +28,7 @@ Route to:
 
 ```sql
 -- 1) Validate string availability
-SELECT string_count();
+SELECT COUNT(*) AS strings FROM strings;
 
 -- 2) Sample high-value strings
 SELECT content, printf('0x%X', address) AS addr
@@ -43,20 +43,20 @@ SELECT rebuild_strings();
 
 Interpretation guidance:
 - Strings are often quickest behavioral clues; pivot to `xrefs` immediately for execution context.
-- For opcode/pattern hunts, prefer `search_bytes()` over full instruction scans.
+- For opcode/pattern hunts, prefer the `byte_search` table over full instruction scans.
 
 ---
 
 ## Failure and Recovery
 
 - No strings or unexpectedly low count:
-  - Run `rebuild_strings()` and validate with `string_count()`.
+  - Run `rebuild_strings()` and validate with `COUNT(*) FROM strings`.
 - Too many false positives:
   - Increase specificity (`LIKE`, regex-like pattern narrowing, module/function join filters).
 - Byte pattern search too broad:
-  - Restrict by range or post-filter via `func_start(...)`.
+  - Restrict by range or join matched byte addresses to `funcs`.
 - Need named functions, labels, structs, or members instead of string contents:
-  - Use `grep`, not `strings` or `search_bytes()`.
+  - Use `grep`, not `strings` or `byte_search`.
 
 ---
 
@@ -107,7 +107,7 @@ SELECT type_name, layout_name, COUNT(*) as count
 FROM strings GROUP BY type_name, layout_name ORDER BY count DESC;
 ```
 
-**Important:** For new analysis (exe/dll), strings are auto-built. For existing databases (i64/idb), strings are already saved. If you see 0 strings unexpectedly, run `SELECT rebuild_strings()` once to rebuild the list. See String List Functions section below.
+**Important:** For new analysis (exe/dll), strings are auto-built. For existing databases (i64/idb), strings are already saved. If you see 0 strings unexpectedly, run `SELECT rebuild_strings()` once to rebuild the list. See String List Surfaces section below.
 
 ---
 
@@ -120,7 +120,7 @@ Use `strings + xrefs + funcs` directly. This is the canonical pattern.
 SELECT
     s.content as string_value,
     printf('0x%X', x.from_ea) as ref_addr,
-    func_at(x.from_ea) as func_name
+    (SELECT name FROM funcs WHERE x.from_ea >= address AND x.from_ea < end_ea LIMIT 1) as func_name
 FROM strings s
 JOIN xrefs x ON x.to_ea = s.address
 WHERE s.content LIKE '%error%' OR s.content LIKE '%fail%'
@@ -128,7 +128,7 @@ ORDER BY func_name, ref_addr;
 
 -- Functions with most string references
 SELECT
-    func_at(x.from_ea) as func_name,
+    (SELECT name FROM funcs WHERE x.from_ea >= address AND x.from_ea < end_ea LIMIT 1) as func_name,
     COUNT(*) as string_refs
 FROM strings s
 JOIN xrefs x ON x.to_ea = s.address
@@ -143,19 +143,35 @@ LIMIT 10;
 
 | Function | Description |
 |----------|-------------|
-| `bytes(addr, n)` | Read `n` bytes as hex string |
+| `bytes(addr, n)` | Read `n` raw bytes as hex string |
 | `bytes_raw(addr, n)` | Read `n` bytes as BLOB |
+
+For row-shaped byte workflows, `bytes` is a pure mapped-byte table:
+```sql
+SELECT ea, value
+FROM bytes
+WHERE ea >= 0x401000 AND ea < 0x401010
+ORDER BY ea;
+```
+
+Use `heads` when you need IDA item size/type metadata.
 
 ---
 
-## SQL Functions — Binary Search
+## Binary Search Table
 
-| Function | Description |
-|----------|-------------|
-| `search_bytes(pattern)` | Find all matches, returns JSON array |
-| `search_bytes(pattern, start, end)` | Search within address range |
-| `search_first(pattern)` | First match address (or NULL) |
-| `search_first(pattern, start, end)` | First match in range |
+Use `byte_search` for raw bytes/opcodes. It requires `WHERE pattern = ...`; `matched_hex` is an output column, not the search input.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `address` | INT | Match address |
+| `matched_hex` | TEXT | Matched bytes rendered as hex text |
+| `matched_bytes` | BLOB | Matched bytes as raw bytes |
+| `size` | INT | Match size in bytes |
+| `pattern` | HIDDEN TEXT | Required IDA byte pattern input |
+| `start_ea` | HIDDEN INT | Optional inclusive lower bound |
+| `end_ea` | HIDDEN INT | Optional exclusive upper bound |
+| `max_results` | HIDDEN INT | Optional generator cap |
 
 **Pattern syntax (IDA native):**
 - `"48 8B 05"` - Exact bytes (hex, space-separated)
@@ -167,18 +183,23 @@ LIMIT 10;
 **Example:**
 ```sql
 -- Find all matches for a pattern
-SELECT search_bytes('48 8B ? 00');
-
--- Parse JSON results
-SELECT json_extract(value, '$.address') as addr
-FROM json_each(search_bytes('48 89 ?'))
+SELECT address, matched_hex, size
+FROM byte_search
+WHERE pattern = '48 8B ? 00'
 LIMIT 10;
 
 -- First match only
-SELECT printf('0x%llX', search_first('CC CC CC'));
+SELECT printf('0x%llX', address) AS addr
+FROM byte_search
+WHERE pattern = 'CC CC CC'
+ORDER BY address
+LIMIT 1;
 
 -- Search with alternatives
-SELECT search_bytes('E8 (01 02 03 04)');
+SELECT address, matched_hex
+FROM byte_search
+WHERE pattern = 'E8 (01 02 03 04)'
+LIMIT 20;
 ```
 
 **Optimization Pattern: Find functions using specific instruction**
@@ -186,21 +207,23 @@ SELECT search_bytes('E8 (01 02 03 04)');
 To answer "How many functions use RDTSC instruction?" efficiently:
 ```sql
 -- Count unique functions containing RDTSC (opcode: 0F 31)
-SELECT COUNT(DISTINCT func_start(json_extract(value, '$.address'))) as count
-FROM json_each(search_bytes('0F 31'))
-WHERE func_start(json_extract(value, '$.address')) IS NOT NULL;
+SELECT COUNT(DISTINCT f.address) as count
+FROM byte_search b
+JOIN funcs f ON b.address >= f.address AND b.address < f.end_ea
+WHERE b.pattern = '0F 31';
 
 -- List those functions with names
 SELECT DISTINCT
-    func_start(json_extract(value, '$.address')) as func_ea,
-    name_at(func_start(json_extract(value, '$.address'))) as func_name
-FROM json_each(search_bytes('0F 31'))
-WHERE func_start(json_extract(value, '$.address')) IS NOT NULL;
+    f.address as func_ea,
+    f.name as func_name
+FROM byte_search b
+JOIN funcs f ON b.address >= f.address AND b.address < f.end_ea
+WHERE b.pattern = '0F 31';
 ```
 
 This is **much faster** than scanning all disassembly lines because:
-- `search_bytes()` uses native binary search
-- `func_start()` is O(1) lookup in IDA's function index
+- `byte_search` uses IDA's native binary search
+- the containment join uses the compact `funcs` table instead of scanning every instruction
 
 ---
 
@@ -208,20 +231,20 @@ This is **much faster** than scanning all disassembly lines because:
 
 - Use `grep` for named entities such as functions, labels, structs, enums, and members.
 - Use `strings` when the user is searching literal string contents inside the binary.
-- Use `search_bytes()` when the target is a raw byte or opcode pattern.
+- Use `byte_search` when the target is a raw byte or opcode pattern.
 
 ---
 
-## SQL Functions — String List Functions
+## SQL Surfaces — String List
 
-IDA maintains a cached list of strings. Use `rebuild_strings()` to detect and cache strings.
+IDA maintains a cached list of strings. Use `rebuild_strings()` to detect and cache strings, `COUNT(*) FROM strings` for the current count, and `strings` for row-level analysis.
 
-| Function | Description |
-|----------|-------------|
+| Surface | Description |
+|---------|-------------|
 | `rebuild_strings()` | Rebuild with ASCII + UTF-16, minlen 5 (default) |
 | `rebuild_strings(minlen)` | Rebuild with custom minimum length |
 | `rebuild_strings(minlen, types)` | Rebuild with custom length and type mask |
-| `string_count()` | Get current string count (no rebuild) |
+| `SELECT COUNT(*) FROM strings` | Current string-list count (optimized without row materialization) |
 
 **Type mask values:**
 - `1` = ASCII only (STRTYPE_C)
@@ -232,7 +255,7 @@ IDA maintains a cached list of strings. Use `rebuild_strings()` to detect and ca
 
 ```sql
 -- Check current string count
-SELECT string_count();
+SELECT COUNT(*) AS strings FROM strings;
 
 -- Rebuild with defaults (ASCII + UTF-16, minlen 5)
 SELECT rebuild_strings();
@@ -262,13 +285,14 @@ The `rebuild_strings()` function configures IDA's string detection with sensible
 
 | Table/Function | Architecture | Notes |
 |----------------|-------------|-------|
+| `COUNT(*) FROM strings` | Cached table count path | O(1) current string-list count |
 | `strings` | Cached | Rebuilt on demand via `rebuild_strings()`; fast once cached |
-| `search_bytes()` | Native binary search | Much faster than iterating instructions table |
+| `byte_search` | Native binary search table | Much faster than iterating instructions table |
 | `bytes()` | Direct read | O(1) per address, no table overhead |
 
 **Key rules:**
 - Always call `rebuild_strings()` before the first string query on a new database or after making code/data changes that may create new strings.
-- `search_bytes()` uses IDA's native binary search engine — it scans raw bytes directly, bypassing the instruction decoder. For "find functions containing opcode X", `search_bytes()` + `func_start()` is orders of magnitude faster than scanning the `instructions` table.
+- `byte_search` uses IDA's native binary search engine; for "find functions containing opcode X", join matches to `funcs` by containment instead of scanning the `instructions` table.
 - `strings` table is a snapshot of the cached string list. If IDA's analysis creates new strings after your initial query, call `rebuild_strings()` again.
 - For cross-referencing strings with functions, the `strings + xrefs + funcs` JOIN pattern is canonical — IDA's xref index makes the JOIN fast.
 
@@ -325,13 +349,13 @@ WITH interesting_strings AS (
        OR content LIKE '%socket%' OR content LIKE '%connect%'
 ),
 string_funcs AS (
-    SELECT DISTINCT func_start(x.from_ea) AS func_addr,
+    SELECT DISTINCT (SELECT address FROM funcs WHERE x.from_ea >= address AND x.from_ea < end_ea LIMIT 1) AS func_addr,
            s.content AS matched_string
     FROM interesting_strings s
     JOIN xrefs x ON x.to_ea = s.address
-    WHERE func_start(x.from_ea) IS NOT NULL
+    WHERE (SELECT address FROM funcs WHERE x.from_ea >= address AND x.from_ea < end_ea LIMIT 1) IS NOT NULL
 )
-SELECT func_at(sf.func_addr) AS func_name,
+SELECT (SELECT name FROM funcs WHERE sf.func_addr >= address AND sf.func_addr < end_ea LIMIT 1) AS func_name,
        printf('0x%X', sf.func_addr) AS addr,
        f.size AS func_size,
        GROUP_CONCAT(sf.matched_string, ' | ') AS strings_referenced
@@ -349,19 +373,19 @@ Cross-category correlation for identifying data exfiltration or C2 communication
 ```sql
 -- Functions touching both crypto and network strings
 WITH crypto_refs AS (
-    SELECT DISTINCT func_start(x.from_ea) AS func_addr
+    SELECT DISTINCT (SELECT address FROM funcs WHERE x.from_ea >= address AND x.from_ea < end_ea LIMIT 1) AS func_addr
     FROM strings s JOIN xrefs x ON x.to_ea = s.address
     WHERE s.content LIKE '%crypt%' OR s.content LIKE '%aes%'
        OR s.content LIKE '%cipher%' OR s.content LIKE '%hash%'
 ),
 network_refs AS (
-    SELECT DISTINCT func_start(x.from_ea) AS func_addr
+    SELECT DISTINCT (SELECT address FROM funcs WHERE x.from_ea >= address AND x.from_ea < end_ea LIMIT 1) AS func_addr
     FROM strings s JOIN xrefs x ON x.to_ea = s.address
     WHERE s.content LIKE '%socket%' OR s.content LIKE '%connect%'
        OR s.content LIKE '%send%' OR s.content LIKE '%recv%'
        OR s.content LIKE '%http%'
 )
-SELECT func_at(c.func_addr) AS func_name,
+SELECT (SELECT name FROM funcs WHERE c.func_addr >= address AND c.func_addr < end_ea LIMIT 1) AS func_name,
        printf('0x%X', c.func_addr) AS addr
 FROM crypto_refs c
 JOIN network_refs n ON n.func_addr = c.func_addr;

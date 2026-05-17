@@ -198,6 +198,7 @@ This is metadata-only and not a replacement for UI context capture.
 | `funcs_count` | INT | Number of detected functions |
 | `segments_count` | INT | Number of segments |
 | `names_count` | INT | Number of named addresses |
+| `strings_count` | INT | Current IDA string-list count |
 
 ```sql
 SELECT * FROM welcome;
@@ -234,12 +235,17 @@ Address-taking SQL functions accept:
 - numeric strings (`'4198400'`, `'0x401000'`)
 - symbol names resolved with `get_name_ea(BADADDR, name)` (global names)
 
+Quoted numeric strings are for address-taking scalar functions. For table
+predicates, compare address columns to integer EAs such as `address = 0x401000`.
+
 Examples:
 ```sql
 SELECT decompile('DriverEntry');
 SELECT set_type('DriverEntry', 'NTSTATUS DriverEntry(PDRIVER_OBJECT, PUNICODE_STRING);');
-SELECT comment_at('0x401000');
+SELECT (SELECT comment FROM comments WHERE address = 0x401000 LIMIT 1);
 ```
+
+Read address comments from the `comments` table after resolving the target EA.
 
 If a symbol cannot be resolved, SQL functions return an explicit error like:
 `Could not resolve name to address: <name>`.
@@ -338,7 +344,9 @@ WHERE itype IN (16, 18)  -- x86 call opcodes
 SELECT address FROM funcs ORDER BY RANDOM() LIMIT 1;
 
 -- FAST: O(1) - direct index access
-SELECT func_at_index(ABS(RANDOM()) % func_qty());
+SELECT address
+FROM funcs
+WHERE rowid = ABS(RANDOM()) % (SELECT COUNT(*) FROM funcs);
 ```
 
 ### CTE-First Mutation Workflow
@@ -400,18 +408,17 @@ This keeps mutation scope explicit and predictable for both humans and agents.
 | Hidden pointer types | `types_func_args WHERE is_ptr = 0 AND is_ptr_resolved = 1` |
 | Manage breakpoints | `breakpoints` (full CRUD) |
 | Modify segments | `segments` (INSERT/UPDATE/DELETE) |
-| Rename decompiler labels | `rename_label(...)` or `UPDATE ctree_labels SET name=...` |
+| Rename decompiler labels | `UPDATE ctree_labels SET name=... WHERE func_addr=... AND label_num=...` |
 | Delete instructions | `instructions` (DELETE converts to unexplored bytes) |
 | Recreate instructions | `make_code`, `make_code_range` |
 | Bulk patch from file bytes | `load_file_bytes(path, file_offset, address, size[, patchable])` |
-| EA to physical offset mapping | `bytes.fpos` (`NULL` means unmapped) |
+| EA to physical offset mapping | `bytes.fpos` on mapped byte rows (`NULL` means no file offset) |
 | Create types | `types` (INSERT struct/union/enum) |
 | Add struct members | `types_members` (INSERT) |
 | Add enum values | `types_enum_values` (INSERT) |
 | Modify database | `funcs`, `names`, `comments`, `bookmarks` (INSERT/UPDATE/DELETE) |
 | Store custom key-value data | `netnode_kv` (full CRUD, persists in IDB) |
 | Entity search (structured) | `grep` skill + `grep WHERE pattern = '...'` |
-| Entity search (JSON) | `grep` skill + `grep('pattern', limit, offset)` |
 
 **Remember:** Always use `func_addr = X` constraints on instruction and decompiler tables for acceptable performance.
 
@@ -421,5 +428,5 @@ This keeps mutation scope explicit and predictable for both humans and agents.
 
 - **No Hex-Rays license:** Decompiler tables (`pseudocode`, `ctree*`, `ctree_lvars`) will be empty or unavailable
 - **No constraint on decompiler tables:** Query will be extremely slow (decompiles all functions)
-- **Invalid address:** Functions like `func_at(addr)` return NULL
+- **Invalid address:** Containing-function table lookups return no row; use a scalar subquery when you need a nullable scalar result
 - **Missing function:** JOINs may return fewer rows than expected

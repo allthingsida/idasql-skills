@@ -16,7 +16,7 @@ Fingerprint functions by their instruction mix -- useful for finding similar fun
 -- Top 10 most "complex" functions by unique mnemonic count
 WITH mnemonic_profile AS (
     SELECT func_addr,
-           func_at(func_addr) AS func_name,
+           (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) AS func_name,
            COUNT(DISTINCT mnemonic) AS unique_mnemonics,
            COUNT(*) AS total_insns
     FROM instructions
@@ -41,7 +41,7 @@ Hub functions that call many different APIs are often dispatchers, init routines
 -- Functions calling the most distinct callees
 WITH callee_counts AS (
     SELECT func_addr,
-           func_at(func_addr) AS func_name,
+           (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) AS func_name,
            COUNT(DISTINCT callee_name) AS unique_callees
     FROM disasm_calls
     WHERE callee_name IS NOT NULL AND callee_name != ''
@@ -75,7 +75,7 @@ call_counts AS (
     SELECT func_addr AS addr, COUNT(*) AS n_calls
     FROM disasm_calls GROUP BY func_addr
 )
-SELECT func_at(i.addr) AS name,
+SELECT (SELECT name FROM funcs WHERE i.addr >= address AND i.addr < end_ea LIMIT 1) AS name,
        printf('0x%X', i.addr) AS addr,
        COALESCE(b.n_blocks, 0) AS blocks,
        i.n_insns AS insns,
@@ -95,11 +95,14 @@ Find the largest functions in each segment -- useful for triage:
 ```sql
 -- Top 3 largest functions per segment (by instruction count)
 WITH ranked AS (
-    SELECT segment_at(f.address) AS seg,
+    SELECT s.name AS seg,
            f.name,
            f.size,
-           ROW_NUMBER() OVER (PARTITION BY segment_at(f.address) ORDER BY f.size DESC) AS rank
+           ROW_NUMBER() OVER (PARTITION BY s.start_ea ORDER BY f.size DESC) AS rank
     FROM funcs f
+    JOIN segments s
+      ON f.address >= s.start_ea
+     AND f.address < s.end_ea
 )
 SELECT seg, name, size
 FROM ranked

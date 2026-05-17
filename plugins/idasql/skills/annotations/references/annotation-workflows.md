@@ -8,7 +8,7 @@ High-fidelity guidance:
 - Optimize for readable semantics, not exact source syntax. IDA may still emit forms like `qmemcpy(...)` for struct copies.
 - Front-load decls, prototypes, and local/global type changes, then refresh once so the typed ctree/lvars exist before cleanup.
 - After that typed refresh, rename what the decompiler currently calls things, then apply labels, union/numform shaping, and comments.
-- Prefer `rename_lvar*` for local names; reserve raw `UPDATE ctree_lvars SET name = ...` for simple current-row edits you already inspected.
+- For local names, inspect/select one deterministic `idx`, then `UPDATE ctree_lvars SET name = ... WHERE func_addr = ... AND idx = ...`.
 - Judge success by recovered member paths and fewer casts/temp locals. String constants may still render as named objects like `aRb`, which is fine.
 - Treat the repeatable function comment summary (`funcs.rpt_comment`) as mandatory for a completed annotation pass.
 
@@ -36,9 +36,9 @@ UPDATE funcs
 SET prototype = 'int __fastcall dispatch_request(AnnotSession *session, AnnotRequest *request);'
 WHERE address = 0x14000107E;
 
-SELECT set_name(0x1400050C0, 'g_last_status');
+INSERT INTO names(address, name) VALUES (0x1400050C0, 'g_last_status');
 SELECT set_type(0x1400050C0, 'int g_last_status;');
-SELECT set_name(0x1400050C8, 'g_trace');
+INSERT INTO names(address, name) VALUES (0x1400050C8, 'g_trace');
 SELECT set_type(0x1400050C8, 'unsigned __int64 g_trace;');
 
 -- 4. Refresh once so typed ctree/lvars reflect the new declarations
@@ -48,15 +48,32 @@ SELECT decompile(0x14000107E, 1);
 SELECT idx, name, type FROM ctree_lvars WHERE func_addr = 0x14000107E ORDER BY idx;
 SELECT label_num, name FROM ctree_labels WHERE func_addr = 0x14000107E ORDER BY label_num;
 
-SELECT rename_lvar_by_name(0x14000107E, 'x', 'status');
-SELECT rename_lvar_by_name(0x14000107E, 'request_union_slot_raw', 'payload_value');
+UPDATE ctree_lvars SET name = 'status'
+WHERE func_addr = 0x14000107E
+  AND idx = (
+    SELECT idx FROM ctree_lvars
+    WHERE func_addr = 0x14000107E AND name = 'x'
+    ORDER BY idx LIMIT 1
+  );
+UPDATE ctree_lvars SET name = 'payload_value'
+WHERE func_addr = 0x14000107E
+  AND idx = (
+    SELECT idx FROM ctree_lvars
+    WHERE func_addr = 0x14000107E AND name = 'request_union_slot_raw'
+    ORDER BY idx LIMIT 1
+  );
 UPDATE ctree_lvars SET comment = 'Final status for the current request path.'
-WHERE func_addr = 0x14000107E AND name = 'status';
+WHERE func_addr = 0x14000107E
+  AND idx = (
+    SELECT idx FROM ctree_lvars
+    WHERE func_addr = 0x14000107E AND name = 'status'
+    ORDER BY idx LIMIT 1
+  );
 
 UPDATE ctree_labels SET name = 'fail'
-WHERE func_addr = 0x14000107E AND name = 'LABEL_12';
+WHERE func_addr = 0x14000107E AND label_num = 12;
 UPDATE ctree_labels SET name = 'done'
-WHERE func_addr = 0x14000107E AND name = 'LABEL_13';
+WHERE func_addr = 0x14000107E AND label_num = 13;
 
 -- 6. Add one repeatable function comment summary
 UPDATE funcs
@@ -98,7 +115,7 @@ Discover existing analyst breadcrumbs and consolidate them:
 
 ```sql
 -- Find functions with TODO comments already present
-SELECT func_at(func_addr) AS func_name,
+SELECT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) AS func_name,
        printf('0x%X', ea) AS addr,
        comment
 FROM pseudocode
@@ -143,8 +160,8 @@ SELECT idx, name, type FROM ctree_lvars WHERE func_addr = 0x401000 ORDER BY idx;
 SELECT label_num, name FROM ctree_labels WHERE func_addr = 0x401000 ORDER BY label_num;
 
 -- 3. Edit: Rename local variables to meaningful names
-SELECT rename_lvar(0x401000, 0, 'input_buffer');
-SELECT rename_lvar(0x401000, 1, 'buffer_length');
+UPDATE ctree_lvars SET name = 'input_buffer' WHERE func_addr = 0x401000 AND idx = 0;
+UPDATE ctree_lvars SET name = 'buffer_length' WHERE func_addr = 0x401000 AND idx = 1;
 
 -- 4. Edit: Apply types to improve readability
 UPDATE ctree_lvars SET type = 'char *'

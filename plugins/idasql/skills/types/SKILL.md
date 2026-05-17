@@ -430,7 +430,7 @@ SELECT decompile(0x140001BD0, 1);
 
 ```sql
 -- Set a name at address
-SELECT set_name(0x402000, 'g_config');
+INSERT INTO names(address, name) VALUES (0x402000, 'g_config');
 ```
 
 ---
