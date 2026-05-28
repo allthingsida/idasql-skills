@@ -8,6 +8,47 @@ allowed-tools:
   - Grep
 ---
 
+## CLI Help (verbatim `idasql --help`)
+
+```
+idasql vX.Y.Z - SQL interface to IDA databases
+
+Usage: idasql -s <file> [-q <query>] [-f <file>] [-i] [--export <file>]
+
+Options:
+  -s <file>            IDA database (.idb/.i64) OR raw binary (.exe/.dll/firmware/etc.)
+                       — raw binaries trigger fresh idalib analysis and string-list rebuild
+  --token <token>      Auth token for HTTP/MCP server mode (if server requires it)
+  -q <sql>             Execute SQL query or semicolon-separated script
+  -f <file>            Execute SQL from file
+  -i                   Interactive REPL mode
+  -w, --write          Save database on exit (persist changes)
+  --export <file>      Export tables to SQL file (local mode only)
+  --export-tables=X    Tables to export: * (all, default) or table1,table2,...
+  --http [port]        Start HTTP REST server (default: 8080, local mode only)
+  --bind <addr>        Bind address for HTTP/MCP server (default: 127.0.0.1)
+  --mcp [port]         Start MCP server (default: random port, use in -i mode)
+                       Or use .mcp start in interactive mode
+  -h, --help           Show this help
+  --version            Show version
+
+Examples:
+  idasql -s test.i64 -q "SELECT name, size FROM funcs LIMIT 10"
+  idasql -s test.i64 -f queries.sql
+  idasql -s test.i64 -i
+  idasql -s test.i64 --export dump.sql
+  idasql -s test.i64 --http 8080
+  idasql -s sample.exe --http 8081       # raw PE: idalib auto-analyzes, then serves SQL
+  idasql -s firmware.bin -q "SELECT * FROM welcome"
+  idasql -s test.i64 --mcp 9000
+```
+
+**Key takeaway:** `-s` accepts either an existing IDA database **or** a raw binary. No
+manual `idat -A -B` / `ida -B` pre-step is needed — point `-s` straight at the
+`.exe`/`.dll`/firmware/etc. and idalib creates the database on first open.
+
+---
+
 ## Additional Resources
 
 - For canonical schema catalog: [references/schema-catalog.md](references/schema-catalog.md)
@@ -23,8 +64,9 @@ allowed-tools:
 Use these commands first to avoid guessing behavior or schema:
 
 ```bash
-# Single query
+# Query or semicolon-separated script
 idasql -s database.i64 -q "SELECT * FROM welcome"
+idasql -s database.i64 -q "SELECT * FROM welcome; SELECT COUNT(*) FROM funcs;"
 
 # Interactive REPL
 idasql -s database.i64 -i
@@ -32,13 +74,24 @@ idasql -s database.i64 -i
 # Long-lived HTTP server for iterative analysis
 idasql -s database.i64 --http 8081
 
+# Raw binary (.exe/.dll/firmware/etc.) — idalib auto-analyzes on first open
+idasql -s sample.exe --http 8081
+idasql -s sample.exe -q "SELECT * FROM welcome"
+
 # Query over HTTP
 curl -X POST http://127.0.0.1:8081/query -d "SELECT name, size FROM funcs LIMIT 5"
 ```
 
 Critical guardrails:
-- Always provide `-s <db>` (`.idb` / `.i64`).
+- Always provide `-s <file>`. The file can be either an IDA database (`.idb` / `.i64`)
+  **or** a raw binary (`.exe`, `.dll`, firmware blob, etc.) — raw binaries trigger fresh
+  idalib auto-analysis and string-list rebuild. Do **not** pre-create an IDB with
+  `idat -A -B`; `idasql -s raw.exe` does it in one shot.
 - Use `--write` when you want edits persisted on exit.
+- SQL inputs to `-q`, HTTP `/query`, MCP `idasql_query`, and plugin CLI may be one statement or a semicolon-separated script. Semicolons inside quoted strings are safe.
+- **All `/query` responses use the canonical script envelope** — single statement = array of one. The envelope is:
+  `{success, statement_count, results:[{statement_index, success, columns, rows, row_count, elapsed_ms, error}], row_count_total, elapsed_ms_total, first_error_index}`.
+  Fail-fast is the default; pass `continue_on_error=true` (HTTP query string or MCP arg) to run every statement regardless of earlier failures. Each `results[i].error` is canonical for per-statement failures; `first_error_index` points at the earliest failure or is `null` when everything succeeded.
 - Discover schema before writing queries:
   - REPL: `.schema <table>`
   - SQL: `PRAGMA table_xinfo(<table>);` (or `PRAGMA table_info(<table>);`)
@@ -67,7 +120,9 @@ Manual refresh:
 
 Use this exact startup flow before deep analysis:
 
-1. Connect to database (`-s`, `-i`, or `--http`).
+1. Connect to database (`-s`, `-i`, or `--http`). `-s` accepts either an existing IDB
+   (`.idb`/`.i64`) or a raw binary (`.exe`/`.dll`/firmware/etc.) — never pre-build an
+   IDB with `idat`; let `idasql -s raw.exe` do it.
 2. Run orientation query:
 ```sql
 SELECT * FROM welcome;

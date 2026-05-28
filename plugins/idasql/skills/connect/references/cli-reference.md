@@ -19,9 +19,24 @@ Do not use test harness binaries (for example `build/idasql_tests/.../idasql.exe
 
 ### Invocation Modes
 
-**1. Single Query (Local)**
+**0. Fresh Analysis from Raw Binary**
+
+`-s` accepts either an existing IDA database **or** a raw binary. When the path does
+not end in `.idb`/`.i64`, idalib runs auto-analysis and rebuilds the string list on
+first open. No `idat -A -B` / `ida -B` pre-step is needed.
+
+```bash
+idasql -s sample.exe --http 8081
+idasql -s sample.dll -q "SELECT * FROM welcome"
+idasql -s firmware.bin -i
+```
+
+Add `--write` (or `-w`) if you want the freshly analyzed database persisted on exit.
+
+**1. Query or Script (Local)**
 ```bash
 idasql -s database.i64 -q "SELECT * FROM funcs LIMIT 10"
+idasql -s database.i64 -q "SELECT * FROM welcome; SELECT COUNT(*) FROM funcs;"
 idasql -s database.i64 -c "SELECT COUNT(*) FROM funcs"  # -c is alias for -q
 ```
 
@@ -53,9 +68,9 @@ idasql -s database.i64 --export dump.sql --export-tables=funcs,segments
 
 | Option | Description |
 |--------|-------------|
-| `-s <file>` | IDA database file (.idb/.i64) |
+| `-s <file>` | IDA database (`.idb`/`.i64`) **or** raw binary (`.exe`/`.dll`/firmware/etc.) — raw binaries trigger fresh idalib analysis and string-list rebuild |
 | `--token <token>` | Auth token for HTTP/MCP server mode |
-| `-q <sql>` | Execute single SQL query |
+| `-q <sql>` | Execute SQL query or semicolon-separated script |
 | `-f <file>` | Execute SQL from file |
 | `-i` | Interactive REPL mode |
 | `-w, --write` | Save database changes on exit |
@@ -85,14 +100,15 @@ idasql -s database.i64 --export dump.sql --export-tables=funcs,segments
 
 ### Performance Strategy
 
-Opening a database has startup overhead (IDALib initialization and auto-analysis wait). For one query, use `-q`. For iterative work, keep one long-lived session (`-i`, `--http`, or `--mcp`) and run many queries against it.
+Opening a database has startup overhead (IDALib initialization and auto-analysis wait). For one small query or short script, use `-q`. For iterative work, keep one long-lived session (`-i`, `--http`, or `--mcp`) and run many queries against it.
 
-**Single queries:** Use `-q` directly.
+**One-shot query/script:** Use `-q` directly.
 ```bash
 idasql -s database.i64 -q "SELECT COUNT(*) FROM funcs"
+idasql -s database.i64 -q "SELECT * FROM welcome; SELECT COUNT(*) FROM funcs;"
 ```
 
-**Multiple queries / exploration:** Start a server once, then query repeatedly over HTTP.
+**Iterative exploration:** Start a server once, then query repeatedly over HTTP. Each HTTP `/query` body may also be a semicolon-separated script; single statements keep the legacy JSON shape, while scripts return `statements[]`.
 
 Opening an IDA database has startup overhead (idalib initialization, auto-analysis). If you plan to run many queries—exploring the database, experimenting with different queries, or iterating on analysis—avoid re-opening the database each time.
 

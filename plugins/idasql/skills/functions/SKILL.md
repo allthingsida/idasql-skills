@@ -207,7 +207,13 @@ Write comments through the table:
 ```sql
 INSERT INTO comments(address, comment) VALUES (0x401000, 'regular comment');
 INSERT INTO comments(address, rpt_comment) VALUES (0x401000, 'repeatable comment');
+-- Replace an existing comment in place
+UPDATE comments SET comment = 'revised comment' WHERE address = 0x401000;
+-- Remove a comment
+DELETE FROM comments WHERE address = 0x401000;
 ```
+
+Note: `INSERT` at an address that already has a comment **replaces** it (one comment per slot per EA). `UPDATE` is equivalent.
 
 ---
 
