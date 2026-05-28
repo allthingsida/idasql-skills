@@ -12,6 +12,7 @@ SELECT decompile(0x401000);
 
 2. Baseline mutation surfaces (must exist in all supported plugin runtimes):
 ```sql
+-- INSERT acts as upsert at the EA; UPDATE names SET name = ... WHERE address = ... is equivalent.
 INSERT INTO names(address, name) VALUES (0x401000, 'my_func');
 UPDATE ctree_lvars SET name = 'arg0' WHERE func_addr = 0x401000 AND idx = 0;
 UPDATE ctree_lvars SET comment = 'seed comment' WHERE func_addr = 0x401000 AND idx = 0;

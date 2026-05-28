@@ -252,6 +252,8 @@ WHERE address = 0x401000
 LIMIT 1;
 ```
 
+**Upsert semantics:** for the `names` and `comments` tables, `INSERT` at an address that already has a value **replaces** the existing entry (IDA allows only one name and one comment-slot per EA). `UPDATE` is equivalent for the in-place case. For `names`, IDA's `SN_CHECK` flag also auto-disambiguates global name conflicts (e.g. `foo` may become `foo_0` if the name is already used at a different EA) — read back the row after writing to see what was actually stored.
+
 The `comments` table supports INSERT, UPDATE, and DELETE:
 
 | Table | INSERT | UPDATE columns | DELETE |

@@ -429,9 +429,13 @@ SELECT decompile(0x140001BD0, 1);
 ### Names
 
 ```sql
--- Set a name at address
+-- Set a name at address (or replace any existing name at that EA)
 INSERT INTO names(address, name) VALUES (0x402000, 'g_config');
+-- Equivalent: rename in place
+UPDATE names SET name = 'g_config' WHERE address = 0x402000;
 ```
+
+Note: `INSERT` and `UPDATE` against `names` both call IDA's `set_name(ea, name, SN_CHECK)`. IDA permits only one name per address, so `INSERT` at an already-named EA **replaces**. `SN_CHECK` also auto-disambiguates if the new name string conflicts globally (`foo` → `foo_0`); read back the row to see what was actually stored.
 
 ---
 

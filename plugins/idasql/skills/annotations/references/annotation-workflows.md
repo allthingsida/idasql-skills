@@ -36,6 +36,7 @@ UPDATE funcs
 SET prototype = 'int __fastcall dispatch_request(AnnotSession *session, AnnotRequest *request);'
 WHERE address = 0x14000107E;
 
+-- INSERT replaces any existing name at the EA (upsert); UPDATE names SET name = ... WHERE address = ... is equivalent.
 INSERT INTO names(address, name) VALUES (0x1400050C0, 'g_last_status');
 SELECT set_type(0x1400050C0, 'int g_last_status;');
 INSERT INTO names(address, name) VALUES (0x1400050C8, 'g_trace');
