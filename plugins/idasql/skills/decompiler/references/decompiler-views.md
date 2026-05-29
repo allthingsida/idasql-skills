@@ -2,7 +2,7 @@
 
 ## ctree_v_indirect_calls
 
-Use this view to find call sites whose callee is not a direct `cot_obj` or `cot_helper`. It is the preferred discovery surface before `apply_callee_type(...)`.
+Use this view to find call sites whose callee is not a direct `cot_obj` or `cot_helper`. It is the preferred discovery surface before updating `disasm_calls.callee_type`.
 
 | Column | Type | Description |
 |--------|------|-------------|

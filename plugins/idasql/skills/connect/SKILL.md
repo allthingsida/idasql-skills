@@ -290,13 +290,17 @@ Address-taking SQL functions accept:
 - numeric strings (`'4198400'`, `'0x401000'`)
 - symbol names resolved with `get_name_ea(BADADDR, name)` (global names)
 
-Quoted numeric strings are for address-taking scalar functions. For table
-predicates, compare address columns to integer EAs such as `address = 0x401000`.
+Most table predicates should compare address columns to integer EAs such as
+`address = 0x401000`. `applied_types.address` is an intentional exception for
+equality filters/writes: it also accepts numeric strings and symbol names so
+type application can target names directly.
 
 Examples:
 ```sql
 SELECT decompile('DriverEntry');
-SELECT set_type('DriverEntry', 'NTSTATUS DriverEntry(PDRIVER_OBJECT, PUNICODE_STRING);');
+UPDATE applied_types
+SET decl = 'NTSTATUS DriverEntry(PDRIVER_OBJECT, PUNICODE_STRING);'
+WHERE address = 'DriverEntry';
 SELECT (SELECT comment FROM comments WHERE address = 0x401000 LIMIT 1);
 ```
 
@@ -443,6 +447,8 @@ This keeps mutation scope explicit and predictable for both humans and agents.
 | Configure string types | `rebuild_strings(types, minlen)` |
 | Instruction analysis | `instructions WHERE func_addr = X` |
 | Recreate deleted instructions | `make_code(addr)`, `make_code_range(start, end)` |
+| Apply/clear address type declarations | `applied_types` (`INSERT`, `UPDATE decl`, `DELETE`) |
+| Apply/clear call-site prototypes | `UPDATE disasm_calls SET callee_type = ... WHERE ea = X` |
 | Create function at EA | `INSERT INTO funcs(address) VALUES (...)` |
 | View function disassembly | `disasm_func(addr)` or `disasm_range(start, end)` |
 | View decompiled code | `decompile(addr)` |

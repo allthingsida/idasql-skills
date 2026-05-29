@@ -51,18 +51,17 @@ INSERT INTO funcs (address) VALUES (0x401000);
 | `bytes(addr, n)` | Read `n` raw bytes as hex string |
 | `bytes_raw(addr, n)` | Read `n` bytes as BLOB |
 | `load_file_bytes(path, file_offset, address, size[, patchable])` | Load bytes from a host file into IDB memory/file image |
-| `patch_byte(addr, val)` | Patch one byte at `addr` (returns 1/0) |
-| `patch_word(addr, val)` | Patch 2 bytes at `addr` (returns 1/0) |
-| `patch_dword(addr, val)` | Patch 4 bytes at `addr` (returns 1/0) |
-| `patch_qword(addr, val)` | Patch 8 bytes at `addr` (returns 1/0) |
-| `revert_byte(addr)` | Revert one patched byte to original |
-| `get_original_byte(addr)` | Read original (pre-patch) byte |
+
+Patching is done through the writable `bytes` table, not scalar functions:
+UPDATE `value`/`word`/`dword`/`qword` to patch, `original_value` for the
+pre-patch byte, `WHERE is_patched = 1` to enumerate, DELETE to revert.
 
 ```sql
 SELECT bytes(0x401000, 16);
-SELECT patch_byte(0x401000, 0x90) AS ok;
-SELECT bytes(0x401000, 1) AS current, get_original_byte(0x401000) AS original;
-SELECT revert_byte(0x401000) AS reverted;
+UPDATE bytes SET value = 0x90 WHERE ea = 0x401000;       -- patch 1 byte
+UPDATE bytes SET dword = 0x90909090 WHERE ea = 0x401000; -- patch 4 bytes (LE)
+SELECT value AS current, original_value AS original FROM bytes WHERE ea = 0x401000;
+DELETE FROM bytes WHERE ea = 0x401000;                   -- revert
 ```
 
 `load_file_bytes(...)` is intended for file-driven bulk patching workflows. It returns `1` on success, `0` on failure.
@@ -219,17 +218,16 @@ Note: `INSERT` at an address that already has a comment **replaces** it (one com
 
 ## Modification
 
-| Function | Description |
-|----------|-------------|
-| `type_at(addr)` | Read type declaration applied at address |
-| `set_type(addr, decl)` | Apply C declaration/type at address (empty decl clears type; `addr` may be EA, numeric string, or symbol name) |
+| Surface | Description |
+|---------|-------------|
+| `applied_types(address, decl, ordinal, type_name)` | Read/apply/replace/clear C declarations at addresses |
 | `parse_decls(text)` | Import C declarations (struct/union/enum/typedef) into local types |
 
 Preferred SQL write surface for function metadata:
 - `UPDATE funcs SET name = '...', prototype = '...' WHERE address = ...`
 - `INSERT INTO names(address, name) VALUES (..., '...')` or `UPDATE names SET name = '...' WHERE address = ...`
-- `prototype` maps to `type_at/set_type` behavior and invalidates decompiler cache.
-- For per-call indirect-call typing, use `apply_callee_type(call_ea, decl)` from the decompiler surface.
+- `prototype` maps to `applied_types` behavior and invalidates decompiler cache.
+- For per-call indirect-call typing, update `disasm_calls.callee_type`.
 
 ---
 
@@ -308,8 +306,6 @@ ORDER BY o.opnum;
 |----------|-------------|
 | `decompile(addr)` | **PREFERRED** — Full pseudocode with line prefixes |
 | `decompile(addr, 1)` | Force re-decompilation (use after writes/renames) |
-| `apply_callee_type(call_ea, decl)` | Apply a prototype to one indirect/dynamic call site |
-| `callee_type_at(call_ea)` | Read explicit call-site prototype when present |
 | `call_arg_addrs(call_ea)` | JSON array of persisted argument-loader instruction EAs |
 | `set_union_selection(func_addr, ea, path)` | Set/clear union selection path at EA |
 | `set_union_selection_item(func_addr, item_id, path)` | Set/clear union selection path by `ctree.item_id` |

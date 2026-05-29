@@ -366,18 +366,31 @@ For a full multi-struct `parse_decls` example with nested unions, see [reference
 UPDATE funcs SET prototype = 'void __fastcall exec_command(command_t *cmd);'
 WHERE address = 0x140001BD0;
 
--- Apply via set_type function
-SELECT set_type(0x140001BD0, 'void __fastcall exec_command(command_t *cmd);');
+-- Apply/replace the type at any mapped address
+INSERT INTO applied_types(address, decl)
+VALUES (0x140001BD0, 'void __fastcall exec_command(command_t *cmd);');
 
 -- Read current type at address
-SELECT type_at(0x140001BD0);
+SELECT decl, ordinal, type_name
+FROM applied_types
+WHERE address = 0x140001BD0;
+
+-- Address equality also accepts numeric strings and symbol names
+UPDATE applied_types
+SET decl = 'void __fastcall exec_command(command_t *cmd);'
+WHERE address = 'exec_command';
 
 -- Clear type (reset to auto-detected)
-SELECT set_type(0x140001BD0, '');
+DELETE FROM applied_types WHERE address = 0x140001BD0;
 
 -- Re-decompile to see effect
 SELECT decompile(0x140001BD0, 1);
 ```
+
+`applied_types` point lookup is intentionally write-friendly: `WHERE address = X`
+returns one mapped row even when no declaration is applied yet, with `decl`,
+`ordinal`, and `type_name` as NULL. Range scans return only addresses that
+currently have applied type information.
 
 ### Local Variables
 
@@ -404,13 +417,12 @@ WHERE func_addr = 0x140001BD0
 ORDER BY call_ea;
 
 -- Apply a prototype to one call site
-SELECT apply_callee_type(
-  0x140001C3E,
-  'int __fastcall emit_message(const char *name, const char *target, int flag, const char *tag);'
-);
+UPDATE disasm_calls
+SET callee_type = 'int __fastcall emit_message(const char *name, const char *target, int flag, const char *tag);'
+WHERE ea = 0x140001C3E;
 
 -- Verify the persisted call-site typing
-SELECT callee_type_at(0x140001C3E);
+SELECT callee_type FROM disasm_calls WHERE ea = 0x140001C3E;
 SELECT call_arg_addrs(0x140001C3E);
 SELECT decompile(0x140001BD0, 1);
 ```
@@ -419,9 +431,9 @@ SELECT decompile(0x140001BD0, 1);
 
 | Surface | Scope | Semantic vs render-only | Typical use |
 |---------|-------|-------------------------|-------------|
-| `UPDATE funcs SET prototype = ...` / `set_type()` | Function/global address | Semantic | Give a function or global the right declared type |
+| `UPDATE funcs SET prototype = ...` / `applied_types` | Function/global address | Semantic | Give a function or global the right declared type |
 | `UPDATE ctree_lvars SET type = ...` | One decompiled local/arg | Semantic | Clean up local pointer/struct inference |
-| `apply_callee_type(call_ea, decl)` | One call site | Semantic | Fix an indirect call when the callee prototype must be explicit |
+| `UPDATE disasm_calls SET callee_type = ... WHERE ea = ...` | One call site | Semantic | Fix an indirect call when the callee prototype must be explicit |
 | `instructions.operand*_format_spec` | One disassembly operand | Render-only | Show enums/struct offsets in listing output |
 | `set_union_selection*` | One decompiler expression | Render-only | Choose a union arm for nicer pseudocode |
 | `set_numform*` | One decompiler expression operand | Render-only | Change numeric rendering without changing base type |
@@ -459,7 +471,7 @@ WHERE address = 0x401020;
 
 For numform helpers (`set_numform*`) and union selection helpers (`set_union_selection*`), see `decompiler` skill.
 
-`apply_callee_type` belongs on the semantic side of the fence: it affects call analysis, unlike render-only enum/union formatting helpers.
+`disasm_calls.callee_type` belongs on the semantic side of the fence: it affects call analysis, unlike render-only enum/union formatting helpers.
 
 ---
 

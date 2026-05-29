@@ -307,8 +307,6 @@ For `types`, `types_members`, `types_enum_values`, `types_func_args` schemas, ty
 |----------|-------------|
 | `decompile(addr)` | **PREFERRED** -- Full pseudocode with line prefixes |
 | `decompile(addr, 1)` | Same output but forces re-decompilation |
-| `apply_callee_type(call_ea, decl)` | Apply a prototype to one call site |
-| `callee_type_at(call_ea)` | Read explicit call-site prototype when present |
 | `call_arg_addrs(call_ea)` | Read persisted argument-loader addresses as JSON |
 | `set_union_selection(func_addr, ea, path)` | Set/clear union selection path at EA |
 | `set_union_selection_item(func_addr, item_id, path)` | Set/clear union selection path by `ctree.item_id` |
@@ -337,11 +335,11 @@ Targeting guidance:
 
 ## SQL Functions — Modification
 
-For `type_at()`, `set_type()`, `parse_decls()`, and name writes via `names`/`funcs`, see `types` skill.
+For `applied_types`, `parse_decls()`, and name writes via `names`/`funcs`, see `types` skill.
 
 Preferred SQL write surface for function metadata:
 - `UPDATE funcs SET name = '...', prototype = '...', comment = '...', rpt_comment = '...' WHERE address = ...`
-- `prototype` maps to `type_at/set_type` behavior and invalidates decompiler cache.
+- `prototype` maps to `applied_types` behavior and invalidates decompiler cache.
 - `comment` / `rpt_comment` map to `get_func_cmt()` / `set_func_cmt()`.
 
 ---
