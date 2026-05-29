@@ -35,7 +35,7 @@ If any call returns `no such function`, treat that primitive as unavailable in t
 For multi-step decompiler cleanup, use this phase order:
 1. Apply structural typing first: `parse_decls`, prototypes, `ctree_lvars.type`, global types.
 2. Inspect `ctree_v_indirect_calls` for unresolved indirect call sites.
-3. Apply `apply_callee_type(call_ea, decl)` only where function/local typing is still insufficient.
+3. Update `disasm_calls.callee_type` only where function/local typing is still insufficient.
 4. Refresh once with `decompile(func_addr, 1)` so the typed ctree/lvars are current.
 5. Apply rename/label/union-selection/numform/comment cleanup against the refreshed rows.
 6. Refresh and verify again.
@@ -52,20 +52,19 @@ WHERE func_addr = 0x140001BD0
 ORDER BY call_ea;
 
 -- 2. Apply an explicit prototype at one call site
-SELECT apply_callee_type(
-  0x140001C3E,
-  'int __fastcall emit_message(const char *name, const char *target, int flag, const char *tag);'
-);
+UPDATE disasm_calls
+SET callee_type = 'int __fastcall emit_message(const char *name, const char *target, int flag, const char *tag);'
+WHERE ea = 0x140001C3E;
 
 -- 3. Verify persisted call metadata
-SELECT callee_type_at(0x140001C3E);
+SELECT callee_type FROM disasm_calls WHERE ea = 0x140001C3E;
 SELECT call_arg_addrs(0x140001C3E);
 
 -- 4. Refresh once after semantic typing
 SELECT decompile(0x140001BD0, 1);
 ```
 
-`apply_callee_type` is a semantic typing surface. It is different from render-only helpers like `set_union_selection*` and `set_numform*`.
+`disasm_calls.callee_type` is a semantic typing surface. It is different from render-only helpers like `set_union_selection*` and `set_numform*`.
 
 ## Local Type Seeding (Works Even In Minimal Runtimes)
 

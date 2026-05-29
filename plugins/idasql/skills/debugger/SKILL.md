@@ -33,9 +33,9 @@ SELECT printf('0x%X', address) AS addr, type_name, enabled
 FROM breakpoints
 ORDER BY address;
 
--- 2) Current patch inventory
-SELECT printf('0x%X', ea) AS ea, original_value, patched_value
-FROM patched_bytes
+-- 2) Current patch inventory (fast: backed by IDA's patch list)
+SELECT printf('0x%X', ea) AS ea, original_value, value AS patched_value
+FROM bytes WHERE is_patched = 1
 ORDER BY ea
 LIMIT 50;
 
@@ -56,9 +56,9 @@ Interpretation guidance:
 - Breakpoint insert/update failed:
   - Validate address existence and hardware size/type compatibility.
 - Patch verification mismatch:
-  - Re-read `bytes` and `patched_bytes`, then retry with precise address.
+  - Re-read `bytes` (and `WHERE is_patched = 1`), then retry with precise address.
 - Unintended patch side effects:
-  - Revert with `revert_byte(...)` and reassess target instruction context.
+  - Revert with `DELETE FROM bytes WHERE ea = ...` and reassess target instruction context.
 
 ---
 
@@ -132,10 +132,15 @@ mapped byte address; IDA item metadata such as size/type belongs to `heads`.
 | Column | Type | RW | Description |
 |--------|------|----|-------------|
 | `ea` | INT | R | Byte address |
-| `value` | INT | RW | Current byte value (UPDATE patches byte) |
+| `value` | INT | RW | Current byte value (UPDATE patches 1 byte) |
+| `word` | INT | RW | 2-byte little-endian value (UPDATE patches 2 bytes) |
+| `dword` | INT | RW | 4-byte little-endian value (UPDATE patches 4 bytes) |
+| `qword` | INT | RW | 8-byte little-endian value (UPDATE patches 8 bytes) |
 | `original_value` | INT | R | Original byte value before patch |
-| `is_patched` | INT | R | 1 if byte differs from original |
+| `is_patched` | INT | R | 1 if byte differs from original (`WHERE is_patched = 1` enumerates patches fast) |
 | `fpos` | INT | R | Physical/input file offset (NULL when unavailable) |
+
+Revert a patch with `DELETE FROM bytes WHERE ea = ...` (or `WHERE is_patched = 1`).
 
 ```sql
 -- Read one address
@@ -153,11 +158,13 @@ SELECT address, size, type, flags, disasm
 FROM heads
 WHERE address = 0x401000;
 
--- Patch via table update
+-- Patch via table update (single byte, or width columns word/dword/qword)
 UPDATE bytes SET value = 0x90 WHERE ea = 0x401000;
+UPDATE bytes SET dword = 0x90909090 WHERE ea = 0x401000;  -- little-endian
 
--- Inspect patch inventory
-SELECT * FROM patched_bytes LIMIT 20;
+-- Inspect patch inventory (fast: backed by IDA's patch list)
+SELECT printf('0x%X', ea) AS ea, original_value, value AS patched_value
+FROM bytes WHERE is_patched = 1 ORDER BY ea LIMIT 20;
 
 -- Persist once done
 SELECT save_database();
@@ -165,59 +172,57 @@ SELECT save_database();
 
 ---
 
-## patched_bytes
+## bytes — Patching (write surface)
 
-All patched locations tracked by IDA.
+All byte patching is done through the writable `bytes` table. There are no
+`patch_*` / `revert_byte` / `get_original_byte` scalar functions.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `ea` | INT | Patched address |
-| `original_value` | INT | Original byte value |
-| `patched_value` | INT | Current patched value |
-| `fpos` | INT | File offset when available |
+| Column | RW | Meaning |
+|--------|----|---------|
+| `value` | RW | Current byte; UPDATE patches 1 byte |
+| `word` / `dword` / `qword` | RW | UPDATE patches 2/4/8 bytes little-endian |
+| `original_value` | R | Original (pre-patch) byte |
+| `is_patched` | R | 1 if patched; `WHERE is_patched = 1` enumerates patches fast |
 
 ```sql
 SELECT printf('0x%X', ea) AS ea,
        printf('0x%02X', original_value) AS old,
-       printf('0x%02X', patched_value) AS new
-FROM patched_bytes
+       printf('0x%02X', value) AS new
+FROM bytes WHERE is_patched = 1
 ORDER BY ea;
 ```
 
 ---
 
-## SQL Functions — Byte Patching
+## SQL Functions — Byte Access
 
 | Function | Description |
 |----------|-------------|
 | `bytes(addr, n)` | Read `n` raw bytes as hex string |
 | `bytes_raw(addr, n)` | Read `n` bytes as BLOB |
 | `load_file_bytes(path, file_offset, address, size[, patchable])` | Load patch bytes from a host file into memory/file image |
-| `patch_byte(addr, val)` | Patch one byte at `addr` (returns 1/0) |
-| `patch_word(addr, val)` | Patch 2 bytes at `addr` (returns 1/0) |
-| `patch_dword(addr, val)` | Patch 4 bytes at `addr` (returns 1/0) |
-| `patch_qword(addr, val)` | Patch 8 bytes at `addr` (returns 1/0) |
-| `revert_byte(addr)` | Revert one patched byte to original |
-| `get_original_byte(addr)` | Read original (pre-patch) byte |
 
 ```sql
 -- Read bytes
 SELECT bytes(0x401000, 16);
 
--- Patch one byte (example: NOP)
-SELECT patch_byte(0x401000, 0x90) AS ok;
+-- Patch one byte (example: NOP) and a 4-byte little-endian value
+UPDATE bytes SET value = 0x90 WHERE ea = 0x401000;
+UPDATE bytes SET dword = 0x90909090 WHERE ea = 0x401000;
 
 -- Verify current vs original
-SELECT bytes(0x401000, 1) AS current, get_original_byte(0x401000) AS original;
+SELECT value AS current, original_value AS original
+FROM bytes WHERE ea = 0x401000;
 
--- Revert patch
-SELECT revert_byte(0x401000) AS reverted;
+-- Revert patch (one byte, or every patch)
+DELETE FROM bytes WHERE ea = 0x401000;
+DELETE FROM bytes WHERE is_patched = 1;
 
 -- Persist patches explicitly
 SELECT save_database();
 ```
 
-`load_file_bytes(...)` is the bulk alternative to `patch_*` helpers when patch content already exists in a file.
+`load_file_bytes(...)` is the bulk alternative to per-row `UPDATE bytes` patching when the patch content already exists in a file. (The old `patch_byte`/`patch_word`/`patch_dword`/`patch_qword` scalars no longer exist — patch through the `bytes` table instead.)
 
 ---
 
@@ -281,8 +286,8 @@ WHERE dc.callee_name LIKE '%IsDebuggerPresent%';
 -- First inspect the instruction after the call
 SELECT disasm_at(0x401030, 3);
 -- Then patch (adjust addresses based on actual binary)
-SELECT patch_byte(0x401035, 0x90);
-SELECT patch_byte(0x401036, 0x90);
+UPDATE bytes SET value = 0x90 WHERE ea = 0x401035;
+UPDATE bytes SET value = 0x90 WHERE ea = 0x401036;
 ```
 
 ### Inventory all patches and generate report
@@ -292,9 +297,9 @@ SELECT patch_byte(0x401036, 0x90);
 SELECT printf('0x%X', ea) AS address,
        (SELECT name FROM funcs WHERE ea >= address AND ea < end_ea LIMIT 1) AS func_name,
        printf('0x%02X', original_value) AS original,
-       printf('0x%02X', patched_value) AS patched,
+       printf('0x%02X', value) AS patched,
        disasm_at(ea) AS context
-FROM patched_bytes
+FROM bytes WHERE is_patched = 1
 ORDER BY ea;
 ```
 
@@ -306,8 +311,8 @@ ORDER BY ea;
 |-------|------|-----------|-------|
 | `breakpoints` | Small (<100 typical) | none needed | Always fast |
 | `bytes` | All mapped bytes | `ea` | **Critical** — constrain to one address or a tight range |
-| `patched_bytes` | Small (patch count) | none needed | Scans all patches, usually tiny |
+| `bytes WHERE is_patched = 1` | Small (patch count) | `is_patched = 1` | Fast — iterates only patched locations via IDA's patch list |
 
 - `breakpoints` table is small — full scans are fine.
 - `bytes` table emits one row per mapped byte. Use `WHERE ea = X` or a tight `ea` range.
-- `patched_bytes` iterates only patched locations — always fast.
+- `bytes WHERE is_patched = 1` iterates only patched locations — always fast.

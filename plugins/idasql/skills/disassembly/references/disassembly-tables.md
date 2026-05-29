@@ -40,10 +40,15 @@ Use `heads` for IDA item size/type metadata; `bytes` includes item-tail bytes.
 | Column | Type | Description |
 |--------|------|-------------|
 | `ea` | INT | Address |
-| `value` | INT | Current byte value (RW) |
+| `value` | INT | Current byte value (RW; UPDATE patches 1 byte) |
+| `word` | INT | 2-byte little-endian value (RW; UPDATE patches 2 bytes) |
+| `dword` | INT | 4-byte little-endian value (RW; UPDATE patches 4 bytes) |
+| `qword` | INT | 8-byte little-endian value (RW; UPDATE patches 8 bytes) |
 | `original_value` | INT | Original byte before patch |
-| `is_patched` | INT | 1 if byte differs from original |
+| `is_patched` | INT | 1 if byte differs from original (`WHERE is_patched = 1` enumerates patches fast) |
 | `fpos` | INT | Physical/input file offset (NULL when unmapped) |
+
+Revert a patch with `DELETE FROM bytes WHERE ea = ...` (or `WHERE is_patched = 1`).
 
 ```sql
 -- Inspect EA + physical offset mapping over a tight byte range
@@ -59,11 +64,10 @@ LEFT JOIN heads h ON h.address = b.ea
 WHERE b.ea >= 0x401000 AND b.ea < 0x401020
 ORDER BY b.ea;
 
--- Join current bytes with patch inventory offsets
-SELECT b.ea, b.fpos, p.original_value, p.patched_value
-FROM bytes b
-JOIN patched_bytes p ON p.ea = b.ea
-WHERE b.fpos IS NOT NULL;
+-- Patch inventory with file offsets (is_patched enumerates patches fast)
+SELECT ea, fpos, original_value, value AS patched_value
+FROM bytes
+WHERE is_patched = 1 AND fpos IS NOT NULL;
 ```
 
 ## disasm_loops

@@ -38,9 +38,9 @@ WHERE address = 0x14000107E;
 
 -- INSERT replaces any existing name at the EA (upsert); UPDATE names SET name = ... WHERE address = ... is equivalent.
 INSERT INTO names(address, name) VALUES (0x1400050C0, 'g_last_status');
-SELECT set_type(0x1400050C0, 'int g_last_status;');
+INSERT INTO applied_types(address, decl) VALUES (0x1400050C0, 'int g_last_status;');
 INSERT INTO names(address, name) VALUES (0x1400050C8, 'g_trace');
-SELECT set_type(0x1400050C8, 'unsigned __int64 g_trace;');
+INSERT INTO applied_types(address, decl) VALUES (0x1400050C8, 'unsigned __int64 g_trace;');
 
 -- 4. Refresh once so typed ctree/lvars reflect the new declarations
 SELECT decompile(0x14000107E, 1);

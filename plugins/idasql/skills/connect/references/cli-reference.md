@@ -158,7 +158,7 @@ For decompiler-heavy queries, `idasql` emits warnings that suggest adding `WHERE
 
 ## Database Modification
 
-Most write examples are documented next to their tables (`breakpoints`, `segments`, `names`, `instructions`, `types*`, `bookmarks`, `comments`, `ctree_lvars`, `ctree_labels`, `netnode_kv`).
+Most write examples are documented next to their tables (`breakpoints`, `segments`, `names`, `instructions`, `types*`, `applied_types`, `disasm_calls`, `bookmarks`, `comments`, `ctree_lvars`, `ctree_labels`, `netnode_kv`).
 Quick capability matrix:
 
 | Table | INSERT | UPDATE columns | DELETE |
@@ -170,11 +170,12 @@ Quick capability matrix:
 | `bookmarks` | Yes | `description` | Yes |
 | `segments` | Yes | `name`, `class`, `perm` | Yes |
 | `instructions` | — | `operand0_format_spec` .. `operand7_format_spec` | Yes |
-| `bytes` | — | `value` | — |
-| `patched_bytes` | — | — | — |
+| `bytes` | — | `value`, `word`, `dword`, `qword` | Yes (revert patch) |
 | `types` | Yes | Yes | Yes |
 | `types_members` | Yes | Yes | Yes |
 | `types_enum_values` | Yes | Yes | Yes |
+| `applied_types` | Yes | `decl` | Yes |
+| `disasm_calls` | — | `callee_type` | — |
 | `ctree_lvars` | — | `name`, `type`, `comment` | — |
 | `ctree_labels` | — | `name` | — |
 | `netnode_kv` | Yes | `value` | Yes |

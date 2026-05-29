@@ -244,7 +244,7 @@ ORDER BY i.address, o.opnum;
 **Performance:** `WHERE address = X` decodes one instruction; `WHERE func_addr = X` uses O(function_size) iteration. Without one of these constraints, it scans the entire database.
 
 ### disasm_calls
-All call instructions with resolved targets.
+All call instructions with resolved targets and optional call-site prototype overrides.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -252,11 +252,18 @@ All call instructions with resolved targets.
 | `ea` | INT | Call instruction address |
 | `callee_addr` | INT | Target address (0 if unknown) |
 | `callee_name` | TEXT | Target name |
+| `callee_type` | TEXT | RW nullable call-site prototype; `UPDATE` applies/replaces, `NULL` or empty clears |
 
 ```sql
 -- Functions that call malloc
 SELECT DISTINCT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) as caller
 FROM disasm_calls WHERE callee_name LIKE '%malloc%';
+
+-- Apply/replace a call-site prototype, then clear it
+UPDATE disasm_calls
+SET callee_type = 'int (__fastcall *)(const char *path)'
+WHERE ea = 0x401234;
+UPDATE disasm_calls SET callee_type = NULL WHERE ea = 0x401234;
 ```
 
 ---
@@ -498,7 +505,7 @@ SELECT gen_cfg_dot(0x401000);
 | `instructions` | Iterator | `func_addr` | Function-item iterator (fast) vs full code-head scan (slow) |
 | `blocks` | Iterator | `func_ea` | Constraint pushdown: iterates blocks of one function |
 | `cfg_edges` | Iterator | `func_ea` | filter_eq pushdown: O(blocks in function) |
-| `disasm_calls` | Generator | `func_addr` | Lazy streaming, respects LIMIT |
+| `disasm_calls` | Generator | `func_addr`, `ea` for writes | Lazy streaming, respects LIMIT; `callee_type` is writable |
 | `heads` | Generator | `address =`, address range | Consumes `ORDER BY address` for next/previous navigation; broad scans can still be large |
 | `instruction_operands` | Iterator | `address`, `func_addr` | Address lookup decodes one instruction; function lookup iterates one function |
 | `segments` | Index-Based | none needed | Small table, always fast |
@@ -518,6 +525,7 @@ instructions (no constraint) -> O(total_code_heads), potentially 100K+
 blocks WHERE func_ea         -> O(block_count_in_func), fast
 cfg_edges WHERE func_ea      -> O(block_count_in_func), fast
 disasm_calls WHERE func_addr -> O(instructions_in_func), streaming
+disasm_calls UPDATE callee_type WHERE ea -> O(1) call-site lookup
 heads WHERE address          -> O(1) IDA head check
 heads next/prev LIMIT 1      -> O(distance to next/previous defined head)
 instruction_operands address -> O(operands in one instruction)

@@ -11,10 +11,11 @@ Manual refresh procedure:
 
 | Surface | Kind | Owner Skill | Cols | Writable | Notes |
 |---------|------|-------------|------|----------|-------|
+| `applied_types` | virtual | types | 4 | INSERT / UPDATE (`decl`) / DELETE | Address equality accepts EA, numeric string, or symbol name; point lookup can synthesize an untyped mapped row; ranges return typed rows only |
 | `blocks` | virtual | disassembly | 4 | — | Filter by `func_ea` |
 | `bookmarks` | virtual | annotations | 3 | INSERT/UPDATE/DELETE | |
 | `breakpoints` | virtual | debugger | 19 | INSERT/UPDATE/DELETE | |
-| `bytes` | virtual | disassembly | 5 | UPDATE (`value`) | Pure mapped-byte rows; filter by `ea` or tight ranges |
+| `bytes` | virtual | disassembly | 8 | UPDATE (`value`/`word`/`dword`/`qword`) / DELETE (revert patch) | Pure mapped-byte rows; filter by `ea` or tight ranges; `WHERE is_patched = 1` enumerates patches fast |
 | `call_graph` | virtual (TVF) | xrefs | 4 | — | `start` HIDDEN, `direction` HIDDEN, `max_depth` HIDDEN → func_addr, func_name, depth, parent_addr |
 | `cfg_edges` | virtual | disassembly | 4 | — | Filter by `func_ea` (filter_eq pushdown) |
 | `comments` | virtual | annotations | 3 | INSERT/UPDATE/DELETE | |
@@ -23,7 +24,7 @@ Manual refresh procedure:
 | `ctree_lvars` | virtual | decompiler | 12 | UPDATE (`name`, `type`, `comment`) | Filter by `func_addr` |
 | `data_refs` | virtual | xrefs | 5 | — | Cached table of non-code xrefs with containing function info |
 | `db_info` | virtual | disassembly | 3 | — | |
-| `disasm_calls` | virtual | disassembly | 4 | — | Filter by `func_addr` — generator |
+| `disasm_calls` | virtual | disassembly | 5 | UPDATE (`callee_type`) | Filter by `func_addr` — generator; `ea` identifies call-site writes |
 | `disasm_loops` | virtual | disassembly | 6 | — | |
 | `entries` | virtual | disassembly | 3 | — | |
 | `fchunks` | virtual | disassembly | 6 | — | |
@@ -39,7 +40,6 @@ Manual refresh procedure:
 | `local_types` | virtual | types | 6 | — | |
 | `mappings` | virtual | disassembly | 3 | — | |
 | `names` | virtual | disassembly | 4 | INSERT/UPDATE/DELETE | |
-| `patched_bytes` | virtual | debugger | 4 | — | |
 | `problems` | virtual | disassembly | 4 | — | |
 | `pseudocode` | virtual | decompiler | 6 | UPDATE (`comment`, `comment_placement`) | Filter by `func_addr` |
 | `pseudocode_orphan_comments` | virtual | decompiler | 5 | UPDATE (`orphan_comment`, delete-only) | Filter by `func_addr` |

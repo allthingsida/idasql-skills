@@ -363,7 +363,7 @@ WHERE func_addr = 0x401000 AND label_num = 12;
 
 ## Editing Types (Create, Modify, Apply)
 
-For type creation, member CRUD, enum values, `parse_decls()`, `set_type()`, and name writes via `names`/`funcs`, see `types` skill.
+For type creation, member CRUD, enum values, `parse_decls()`, `applied_types`, and name writes via `names`/`funcs`, see `types` skill.
 
 Quick apply patterns used in annotation workflows:
 
@@ -372,8 +372,9 @@ Quick apply patterns used in annotation workflows:
 UPDATE funcs SET prototype = 'void __fastcall exec_command(command_t *cmd);'
 WHERE address = 0x140001BD0;
 
--- Apply via set_type function
-SELECT set_type(0x140001BD0, 'void __fastcall exec_command(command_t *cmd);');
+-- Apply/replace the type at any mapped address
+INSERT INTO applied_types(address, decl)
+VALUES (0x140001BD0, 'void __fastcall exec_command(command_t *cmd);');
 ```
 
 ---
