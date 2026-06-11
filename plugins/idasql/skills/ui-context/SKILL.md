@@ -44,6 +44,21 @@ Use this skill for prompts like:
 
 ---
 
+## Widget Fields (`focused_widget` / `main_viewer`)
+
+- `type_id` (int): raw IDA `twidget_type_t` numeric id.
+- `type_name` (string): the SDK macro name for the widget on the building SDK (for example `"BWN_PSEUDOCODE"`, `"BWN_TILIST"`). The name at SDK slot 10 differs by IDA version (`BWN_TILVIEW` / `BWN_TICSR` / `BWN_TITREE`).
+- `canonical_name` (string): a **stable cross-version** name. For the "Local Types" widget (slot 10) this always reads `"BWN_LOCAL_TYPES"`; for every other widget it equals `type_name`. Prefer this for cross-version reasoning.
+- `category` (string): high-level grouping — one of `disassembly`, `decompiler`, `hex_view`, `type_view`, `chooser`, `debugger`, `navigation`, `output`, `script`, `auxiliary`, `unknown`.
+- `is_address` (bool): widget exposes a meaningful address anchor (true for DISASM, HEXVIEW, PSEUDOCODE, MICROCODE).
+- `is_custom_view` (bool): viewer-style widget with custom line content.
+- `is_chooser_like` (bool): row-based list/chooser widget where row selection is meaningful.
+- `title` (string): the widget's title as IDA reports it.
+
+`main_viewer` carries the same widget fields except `is_chooser_like` (the main viewer is always a viewer, not a chooser).
+
+---
+
 ## Temporal Reference Rules
 
 - `this` / `here` / `current` / `selected`: capture a fresh snapshot for this question.
@@ -54,9 +69,11 @@ Use this skill for prompts like:
 
 ## Runtime Availability and Fallback
 
-- `get_ui_context_json()` is plugin GUI runtime only.
-- It is unavailable in idalib/CLI mode.
-- When unavailable, state this clearly and continue with non-UI queries (explicit addresses/symbols, or DB-orientation queries).
+- `get_ui_context_json()` is registered in every runtime, but only the IDA GUI
+  plugin returns live UI state.
+- Under idalib/CLI it returns a stub envelope marked `available:false` /
+  `capture.source:"cli"` (no error, just no UI).
+- When you get the CLI stub, state this clearly and continue with non-UI queries (explicit addresses/symbols, or DB-orientation queries).
 
 `welcome` is database metadata only; it is not a UI context replacement.
 

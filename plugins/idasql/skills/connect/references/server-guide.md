@@ -5,14 +5,14 @@ Standard REST API that works with curl, Python, any HTTP client, or LLM tools.
 ## Starting the Server
 
 ```bash
-# Default port 8081
+# Default port 8080
 idasql -s database.i64 --http
 
 # Custom port and bind address
 idasql -s database.i64 --http 9000 --bind 0.0.0.0
 
 # With authentication
-idasql -s database.i64 --http 8081 --token mysecret
+idasql -s database.i64 --http 8080 --token mysecret
 ```
 
 ## HTTP Endpoints
@@ -31,21 +31,21 @@ idasql -s database.i64 --http 8081 --token mysecret
 
 ```bash
 # Get API documentation
-curl http://localhost:8081/help
+curl http://localhost:8080/help
 
 # Execute SQL query
-curl -X POST http://localhost:8081/query -d "SELECT name, size FROM funcs LIMIT 5"
+curl -X POST http://localhost:8080/query -d "SELECT name, size FROM funcs LIMIT 5"
 
 # Execute a short SQL script
-curl -X POST http://localhost:8081/query -d "SELECT * FROM welcome; SELECT COUNT(*) FROM funcs;"
+curl -X POST http://localhost:8080/query -d "SELECT * FROM welcome; SELECT COUNT(*) FROM funcs;"
 
 # With authentication
-curl -X POST http://localhost:8081/query \
+curl -X POST http://localhost:8080/query \
      -H "Authorization: Bearer mysecret" \
      -d "SELECT * FROM funcs"
 
 # Check status
-curl http://localhost:8081/status
+curl http://localhost:8080/status
 ```
 
 ## Python Automation Patterns
@@ -55,7 +55,7 @@ Use `curl` for quick/manual queries. Use a short Python script when you need loo
 ```python
 import requests
 
-URL = "http://127.0.0.1:8081/query"
+URL = "http://127.0.0.1:8080/query"
 HEADERS = {}  # If --token is enabled: {"Authorization": "Bearer mysecret"}
 
 def post_sql(sql: str):
@@ -83,7 +83,7 @@ for statement in script_payload.get("statements", []):
 ```python
 import requests
 
-URL = "http://127.0.0.1:8081/query"
+URL = "http://127.0.0.1:8080/query"
 HEADERS = {}  # If --token is enabled: {"Authorization": "Bearer mysecret"}
 
 def post_sql(sql: str):
@@ -124,7 +124,7 @@ print(f"Verified rows: {len(check.get('rows', []))}")
 ```python
 import requests
 
-URL = "http://127.0.0.1:8081/query"
+URL = "http://127.0.0.1:8080/query"
 
 def post_sql(sql: str):
     r = requests.post(URL, data=sql, timeout=30)

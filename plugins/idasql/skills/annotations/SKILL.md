@@ -8,7 +8,7 @@ allowed-tools:
   - Grep
 ---
 
-This skill is your guide for **editing** IDA databases through idasql. Use it whenever you need to annotate, rename, retype, comment, or otherwise modify decompiled output, disassembly, or type information. Every edit operation follows the Mandatory Mutation Loop (see `connect` Global Agent Contracts).
+This skill is your guide for **editing** IDA databases through idasql. Use it whenever you need to annotate, rename, retype, comment, or otherwise modify decompiled output, disassembly, or type information.
 
 ---
 
@@ -80,6 +80,7 @@ Default behavior:
 - apply types/prototypes that make the function read more like source
 - rename locals, globals, and labels when they materially improve readability
 - add targeted line comments where they help interpretation
+- place functions into review/triage folders when the workflow creates durable buckets
 - always finish with exactly one repeatable function comment summary on `funcs.rpt_comment`
 - refresh with `decompile(addr, 1)` and verify the result
 
@@ -91,6 +92,52 @@ Use narrower intents only when the user asks narrowly:
 Why the summary is mandatory:
 - it orients a human reviewer immediately
 - it creates semantic/searchable program knowledge for later whole-program understanding
+
+---
+
+## Folder-Aware Annotation Workflow
+
+Use object-table `folder_path` columns to organize work as you annotate. Prefer `funcs.folder_path` for function-level work, `names.folder_path` for globals/labels, and `bookmarks.folder_path` for review breadcrumbs. `dirtree_entries` is the raw browser and `dirtree_folders` manages empty folders across all standard IDA dirtrees.
+
+Common folders:
+- `idasql/review/needs-types`
+- `idasql/review/annotated`
+- `idasql/review/verified`
+- `idasql/triage/network`
+- `idasql/triage/crypto`
+
+```sql
+-- Create a review bucket and move selected functions into it
+INSERT INTO dirtree_folders(tree, path)
+VALUES ('funcs', 'idasql/review/needs-types');
+
+UPDATE funcs
+SET folder_path = 'idasql/review/needs-types'
+WHERE address = 0x401000;
+
+-- Mark a function as annotated while adding the required repeatable summary
+UPDATE funcs
+SET folder_path = 'idasql/review/annotated',
+    rpt_comment = 'Parses command records, validates the opcode, and dispatches to command handlers.'
+WHERE address = 0x401000;
+
+UPDATE names
+SET folder_path = 'idasql/names/globals'
+WHERE name LIKE 'g_%';
+
+UPDATE bookmarks
+SET folder_path = 'idasql/bookmarks/review'
+WHERE description LIKE '%review%';
+
+-- Review progress
+SELECT folder_path, COUNT(*) AS functions
+FROM funcs
+WHERE folder_path LIKE 'idasql/%'
+GROUP BY folder_path
+ORDER BY folder_path;
+```
+
+Use `UPDATE ... SET folder_path = NULL WHERE ...` to move an object back to root. `DELETE FROM dirtree_folders` removes only empty folders. Folder writes use relative `/` paths and reject `.`/`..`, duplicate separators, backslashes, and renames to an already-existing destination.
 
 ---
 
@@ -275,23 +322,29 @@ Notes:
 
 ## bookmarks
 
-The `bookmarks` table supports full CRUD for editing marked positions:
+The `bookmarks` table supports full CRUD for editing marked positions and folder organization:
 
 | Column | Type | Description |
 |--------|------|-------------|
 | `slot` | INT | Bookmark slot index |
 | `address` | INT | Bookmarked address |
 | `description` | TEXT | Bookmark description |
+| `inode` | INT | Read-only dirtree inode |
+| `folder_path` | TEXT | Writable bookmark folder; `NULL` means root |
+| `full_path` | TEXT | Read-only full dirtree path |
 
 ```sql
 -- List all bookmarks
-SELECT printf('0x%X', address) as addr, description FROM bookmarks;
+SELECT printf('0x%X', address) as addr, description, folder_path FROM bookmarks;
 
 -- Edit: Add bookmark
 INSERT INTO bookmarks (address, description) VALUES (0x401000, 'interesting branch');
 
 -- Edit: Update bookmark description
 UPDATE bookmarks SET description = 'confirmed branch' WHERE slot = 0;
+
+-- Edit: Move bookmark into a review folder
+UPDATE bookmarks SET folder_path = 'idasql/bookmarks/confirmed' WHERE slot = 0;
 
 -- Edit: Delete bookmark
 DELETE FROM bookmarks WHERE slot = 0;
@@ -394,11 +447,39 @@ UPDATE instructions
 SET operand0_format_spec = 'stroff:MY_STRUCT,delta=0'
 WHERE address = 0x401030;
 
+-- Edit: Nested member path uses '/' to separate type names
+UPDATE instructions
+SET operand0_format_spec = 'stroff:OUTER_T/INNER_T'
+WHERE address = 0x401030;
+
 -- Edit: Clear representation back to plain
 UPDATE instructions
 SET operand1_format_spec = 'clear'
 WHERE address = 0x401020;
 ```
+
+All of these work at the disassembly level — no IDAPython needed. The UPDATE is
+verified after apply and surfaces a SQL error if the representation didn't take.
+
+The full `operand*_format_spec` vocabulary also covers number bases and other
+display forms:
+
+```sql
+-- Number base / character
+UPDATE instructions SET operand1_format_spec = 'hex'  WHERE address = 0x401020;  -- also dec/oct/bin
+UPDATE instructions SET operand1_format_spec = 'char' WHERE address = 0x401020;
+
+-- Offsets, sizeof, forced operand text
+UPDATE instructions SET operand1_format_spec = 'offset:tbl_start' WHERE address = 0x401020;
+UPDATE instructions SET operand1_format_spec = 'sizeof:MY_STRUCT' WHERE address = 0x401020;
+UPDATE instructions SET operand1_format_spec = 'forced:5 shl 3'   WHERE address = 0x401020;
+
+-- Sign / bitwise-not modifiers (combine with a base, or use alone)
+UPDATE instructions SET operand1_format_spec = 'dec,signed' WHERE address = 0x401020;
+```
+
+Other kinds: `float`, `segment`, `stkvar`, and the `,unsigned` / `,bnot` /
+`,nobnot` modifiers. See the `disassembly` skill for the full table.
 
 ---
 
@@ -456,3 +537,11 @@ When editing many functions or annotations, keep these costs in mind:
 ## Additional Resources
 
 - For full cleanup workflows, bulk annotation patterns, and complete worked examples: [references/annotation-workflows.md](references/annotation-workflows.md)
+
+---
+
+## See Also
+
+- `types` — define and modify type dictionary entries; apply them via `applied_types` or `funcs.prototype`.
+- `decompiler` — pseudocode comments (`UPDATE pseudocode SET comment = ...`); ctree lvar renames/retypes.
+- `disassembly` — rename code labels (`names`), apply instruction-level operand formats.

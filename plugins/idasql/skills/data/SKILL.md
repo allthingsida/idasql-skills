@@ -139,20 +139,40 @@ LIMIT 10;
 
 ---
 
-## SQL Functions — Byte Access (Read-Only)
+## `bytes` Table — Reads, Patches, and Bounded Windows
 
-| Function | Description |
-|----------|-------------|
-| `bytes(addr, n)` | Read `n` raw bytes as hex string |
-| `bytes_raw(addr, n)` | Read `n` bytes as BLOB |
+**All byte access goes through the `bytes` table.** The hidden `start_ea`
++ `n` input columns pair up for bounded reads; bulk hex uses
+`hex(blob_concat(value))`, bulk BLOB uses `blob_concat(value)`.
 
-For row-shaped byte workflows, `bytes` is a pure mapped-byte table:
-```sql
-SELECT ea, value
-FROM bytes
-WHERE ea >= 0x401000 AND ea < 0x401010
-ORDER BY ea;
-```
+| Shape | SQL |
+|-------|-----|
+| Read 1 byte | `SELECT value FROM bytes WHERE ea = 0x401000` |
+| Read N bytes as hex (uppercase, no spaces) | `SELECT hex(blob_concat(value)) FROM (SELECT value FROM bytes WHERE start_ea = 0x401000 AND n = 16 ORDER BY ea)` |
+| Read N bytes as BLOB | `SELECT blob_concat(value) FROM (SELECT value FROM bytes WHERE start_ea = 0x401000 AND n = 16 ORDER BY ea)` |
+| Read a range | `SELECT value FROM bytes WHERE ea >= 0x401000 AND ea < 0x401010 ORDER BY ea` |
+
+The hidden `start_ea` + `n` columns request exactly N consecutive bytes
+beginning at X. They are deliberately distinct from the visible `ea` column
+so any predicate on `ea` (joins, compound `WHERE`) stays enforceable by
+SQLite. The bounded read does not skip unmapped addresses; rows beyond the
+mapped region report whatever `get_byte()` yields there.
+
+`blob_concat(value)` is a libxsql aggregate that concatenates row values
+into one BLOB; `hex()` is the SQLite built-in BLOB→hex helper (uppercase).
+
+### Unbounded-range gotcha
+
+`WHERE ea > X` **without an upper bound or LIMIT** walks every mapped byte
+from X to end-of-image — millions of rows and seconds of wall time. Always
+pair the read with one of:
+
+- `WHERE start_ea = X AND n = N` (bounded read shape)
+- `AND ea < B` (two-sided range)
+- outer `LIMIT N`
+
+The table has no per-call cap; arbitrarily large windows are supported as
+long as the constraint pair is bounded.
 
 Use `heads` when you need IDA item size/type metadata.
 
@@ -288,7 +308,10 @@ The `rebuild_strings()` function configures IDA's string detection with sensible
 | `COUNT(*) FROM strings` | Cached table count path | O(1) current string-list count |
 | `strings` | Cached | Rebuilt on demand via `rebuild_strings()`; fast once cached |
 | `byte_search` | Native binary search table | Much faster than iterating instructions table |
-| `bytes()` | Direct read | O(1) per address, no table overhead |
+| `bytes WHERE ea = X` | Point lookup | O(1); virtual table index |
+| `bytes WHERE start_ea = X AND n = N` | Bounded read via hidden `start_ea` + `n` | O(N); virtual table index |
+| `bytes WHERE ea >= A AND ea < B` | Range scan | O(range); virtual table index |
+| `bytes WHERE ea > X` (unbounded) | Range scan | **AVOID** — walks every mapped byte to end-of-image; use bounded forms |
 
 **Key rules:**
 - Always call `rebuild_strings()` before the first string query on a new database or after making code/data changes that may create new strings.
@@ -389,3 +412,13 @@ SELECT (SELECT name FROM funcs WHERE c.func_addr >= address AND c.func_addr < en
        printf('0x%X', c.func_addr) AS addr
 FROM crypto_refs c
 JOIN network_refs n ON n.func_addr = c.func_addr;
+```
+
+---
+
+## See Also
+
+- `disassembly` — where strings/bytes are referenced in code (operand-targeted reads).
+- `xrefs` — data references to a target address; canonical pivot from a data hit to its consumers.
+- `debugger` — byte patching uses the `bytes` table; this skill owns the *read* shapes.
+- `analysis` — strings/imports as triage signals.

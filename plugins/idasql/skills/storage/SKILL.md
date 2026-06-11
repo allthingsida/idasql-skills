@@ -140,3 +140,9 @@ WHERE key LIKE '%:%'
 GROUP BY namespace
 ORDER BY entries DESC;
 ```
+
+---
+
+## See Also
+
+- `annotations` — for analyst breadcrumbs that should live in the address space (comments, bookmarks). Use `netnode_kv` for cross-address session state.

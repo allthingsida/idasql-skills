@@ -376,3 +376,12 @@ ctree (no constraint)    -> one decompilation per row in funcs
 - For detailed workflows (capability probing, mutation loop, call-site typing, local type seeding, fallback patterns, full worked examples): [references/decompiler-workflows.md](references/decompiler-workflows.md)
 - For detailed view schemas (ctree_v_indirect_calls, ctree_v_returns): [references/decompiler-views.md](references/decompiler-views.md)
 - For ctree node types, manipulation patterns, and advanced CTEs: [references/ctree-manipulation.md](references/ctree-manipulation.md)
+
+---
+
+## See Also
+
+- `data` — raw bytes and string content referenced by decompiled code (the `bytes` table for per-byte reads and bounded-window reads via `WHERE start_ea = X AND n = N`; `hex(blob_concat(value))` for hex output).
+- `disassembly` — instruction-level ground truth for the same function (`disasm_func`, `instructions`, `disasm_calls`).
+- `xrefs` — callers and callees of a decompiled function; pivot from pseudocode to call graph.
+- `types` — applied prototypes drive ctree shape; retype via `applied_types` / `funcs.prototype` to clean up casts and indirect calls.

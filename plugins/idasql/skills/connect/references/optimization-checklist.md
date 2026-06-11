@@ -22,14 +22,10 @@ Use this checklist before merging major skill rewrites.
 - [ ] Write examples use precise keys (`func_addr`, `ea`, `idx`, `slot`, etc.).
 - [ ] Verify/refresh steps exist after mutation examples.
 
-## 5) Legacy Parity
-- [ ] Legacy prompt sections are mapped in `legacy-parity-matrix.md`.
-- [ ] No critical legacy capability is marked missing.
-- [ ] Fragmented capabilities have a clear ownership destination.
-
-## 6) Performance and Failure Handling
+## 5) Performance and Failure Handling
 - [ ] Skills include timeout/empty-result fallback patterns.
 - [ ] Skills document high-cost query constraints and safe alternatives.
+- [ ] Raw dirtree examples include `tree = ?` and prefer pushed-down `path`/`parent_path` filters; normal organization examples prefer `funcs.folder_path` / `types.folder_path`.
 - [ ] HTTP/REPL/CLI startup patterns remain deterministic.
 
 ## 7) Consistency

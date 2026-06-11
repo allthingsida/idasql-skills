@@ -94,6 +94,7 @@ If `set_union_selection*` / `set_numform*` / `ctree_item_at` are unavailable:
 - Use `UPDATE ctree_lvars SET type/comment = ...` for local shaping.
 - Use `UPDATE ctree_lvars SET name = ...` after selecting a deterministic `idx`.
 - Use `UPDATE pseudocode SET comment = ...` for stable semantic breadcrumbs.
+- Use `UPDATE funcs SET folder_path = ...` to move reviewed functions through folders such as `idasql/review/needs-types`, `idasql/review/annotated`, and `idasql/review/verified`.
 - Keep constants readable via comments when enum rendering primitives are unavailable.
 - Explicitly note unavailable primitives in your response so follow-up runs don't waste queries.
 

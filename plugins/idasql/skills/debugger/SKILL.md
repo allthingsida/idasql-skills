@@ -72,7 +72,7 @@ Interpretation guidance:
 
 ## breakpoints
 
-Debugger breakpoints. Supports full CRUD (SELECT, INSERT, UPDATE, DELETE). Breakpoints persist in the IDB even without an active debugger session.
+Debugger breakpoints. Supports full CRUD (SELECT, INSERT, UPDATE, DELETE). Breakpoints persist in the IDB even without an active debugger session. `folder_path` is the folder-oriented spelling of IDA's breakpoint `group`; updating either updates the same underlying breakpoint grouping.
 
 | Column | Type | RW | Description |
 |--------|------|----|-------------|
@@ -95,6 +95,8 @@ Debugger breakpoints. Supports full CRUD (SELECT, INSERT, UPDATE, DELETE). Break
 | `is_active` | INT | R | 1=currently active |
 | `group` | TEXT | RW | Breakpoint group name |
 | `bptid` | INT | R | Breakpoint ID |
+| `folder_path` | TEXT | RW | Alias for breakpoint group folder; `NULL` means root |
+| `full_path` | TEXT | R | Full breakpoint dirtree path when available |
 
 ```sql
 -- List all breakpoints
@@ -109,6 +111,10 @@ INSERT INTO breakpoints (address, type, size) VALUES (0x402000, 1, 4);
 
 -- Add conditional breakpoint
 INSERT INTO breakpoints (address, condition) VALUES (0x401000, 'eax == 0');
+
+-- Move breakpoint into/out of an IDA breakpoint folder
+UPDATE breakpoints SET folder_path = 'idasql/breakpoints/network' WHERE address = 0x401000;
+UPDATE breakpoints SET folder_path = NULL WHERE address = 0x401000;
 
 -- Disable a breakpoint
 UPDATE breakpoints SET enabled = 0 WHERE address = 0x401000;
@@ -174,8 +180,7 @@ SELECT save_database();
 
 ## bytes — Patching (write surface)
 
-All byte patching is done through the writable `bytes` table. There are no
-`patch_*` / `revert_byte` / `get_original_byte` scalar functions.
+All byte patching is done through the writable `bytes` table.
 
 | Column | RW | Meaning |
 |--------|----|---------|
@@ -194,17 +199,23 @@ ORDER BY ea;
 
 ---
 
-## SQL Functions — Byte Access
+## Byte Access via the `bytes` Table
 
-| Function | Description |
-|----------|-------------|
-| `bytes(addr, n)` | Read `n` raw bytes as hex string |
-| `bytes_raw(addr, n)` | Read `n` bytes as BLOB |
-| `load_file_bytes(path, file_offset, address, size[, patchable])` | Load patch bytes from a host file into memory/file image |
+All byte reads and patches go through the `bytes` table. Bounded-read
+shapes are documented in `data`; this skill focuses on the patching
+workflow. `load_file_bytes(...)` writes a file's bytes into the IDB at
+a given range; use it when the patch content already lives in a file.
+
+| Function / Shape | Description |
+|------------------|-------------|
+| `SELECT hex(blob_concat(value)) FROM (SELECT value FROM bytes WHERE start_ea = X AND n = N ORDER BY ea)` | Read N bytes as uppercase hex |
+| `SELECT blob_concat(value) FROM (SELECT value FROM bytes WHERE start_ea = X AND n = N ORDER BY ea)` | Read N bytes as BLOB |
+| `load_file_bytes(path, file_offset, address, size[, patchable])` | Write a file's bytes into the IDB at the target range |
 
 ```sql
--- Read bytes
-SELECT bytes(0x401000, 16);
+-- Read 16 bytes as hex
+SELECT hex(blob_concat(value))
+FROM (SELECT value FROM bytes WHERE start_ea = 0x401000 AND n = 16 ORDER BY ea);
 
 -- Patch one byte (example: NOP) and a 4-byte little-endian value
 UPDATE bytes SET value = 0x90 WHERE ea = 0x401000;
@@ -221,8 +232,6 @@ DELETE FROM bytes WHERE is_patched = 1;
 -- Persist patches explicitly
 SELECT save_database();
 ```
-
-`load_file_bytes(...)` is the bulk alternative to per-row `UPDATE bytes` patching when the patch content already exists in a file. (The old `patch_byte`/`patch_word`/`patch_dword`/`patch_qword` scalars no longer exist — patch through the `bytes` table instead.)
 
 ---
 
@@ -316,3 +325,11 @@ ORDER BY ea;
 - `breakpoints` table is small — full scans are fine.
 - `bytes` table emits one row per mapped byte. Use `WHERE ea = X` or a tight `ea` range.
 - `bytes WHERE is_patched = 1` iterates only patched locations — always fast.
+
+---
+
+## See Also
+
+- `disassembly` — instruction context around a patch site (`disasm_at`, operand semantics).
+- `annotations` — record patch rationale via comments/bookmarks before mutating.
+- `data` — canonical owner of byte-read shapes (table vs. scalar disambiguation).
