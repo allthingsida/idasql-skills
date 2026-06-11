@@ -49,7 +49,7 @@ Example contrast:
 ```python
 # Host-side Python (outside IDA): sends SQL over HTTP
 import requests
-requests.post("http://127.0.0.1:8081/query", data="SELECT COUNT(*) FROM funcs")
+requests.post("http://127.0.0.1:8080/query", data="SELECT COUNT(*) FROM funcs")
 ```
 
 ```sql
@@ -141,3 +141,10 @@ print(json.dumps(result))
 -- Then process the JSON output in SQL using json_each()
 -- (copy the output from above into the query)
 ```
+
+---
+
+## See Also
+
+- Check the relevant SQL skill first (`disassembly`, `decompiler`, `types`, `data`, `xrefs`, `annotations`, `debugger`) — fall through to IDAPython only when no SQL surface exists for the task.
+- `functions` — the SQL function catalog; verify a scalar/helper doesn't already exist before scripting.

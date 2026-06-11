@@ -82,6 +82,8 @@ All detected functions in the binary with prototype information.
 | `size` | INT | Function size in bytes |
 | `end_ea` | INT | Function end address |
 | `flags` | INT | Function flags |
+| `folder_path` | TEXT | RW function folder relative to Function window root; `NULL`/`''` means root |
+| `full_path` | TEXT | RO full dirtree path, including function name |
 
 **Prototype columns** (populated when type info available):
 
@@ -105,6 +107,12 @@ SELECT name, printf('0x%X', address) as addr FROM funcs WHERE name LIKE 'sub_%';
 -- Functions returning integers with 3+ arguments
 SELECT name, return_type, arg_count FROM funcs
 WHERE return_is_integral = 1 AND arg_count >= 3;
+
+-- Functions organized by IDASQL annotation folders
+SELECT address, name, folder_path
+FROM funcs
+WHERE folder_path LIKE 'idasql/%'
+ORDER BY folder_path, name;
 ```
 
 **Write operations:**
@@ -115,9 +123,18 @@ INSERT INTO funcs (address) VALUES (0x401000);
 -- Rename a function
 UPDATE funcs SET name = 'my_func' WHERE address = 0x401000;
 
+-- Move a function into an IDA Function window folder
+INSERT INTO dirtree_folders(tree, path) VALUES ('funcs', 'idasql/triage/network');
+UPDATE funcs SET folder_path = 'idasql/triage/network' WHERE address = 0x401000;
+
+-- Move it back to root
+UPDATE funcs SET folder_path = NULL WHERE address = 0x401000;
+
 -- Delete a function
 DELETE FROM funcs WHERE address = 0x401000;
 ```
+
+Folder paths are relative `/` paths. IDASQL rejects `.`/`..`, duplicate separators, backslashes, non-empty folder deletes, and folder renames whose destination already exists.
 
 ### segments
 Memory segments. Supports INSERT, UPDATE (`name`, `class`, `perm`), and DELETE.
@@ -145,6 +162,8 @@ All named locations (functions, labels, data). Supports INSERT, UPDATE, and DELE
 |--------|------|----|-------------|
 | `address` | INT | R | Address |
 | `name` | TEXT | RW | Name |
+| `folder_path` | TEXT | RW | Name-folder path; `NULL` means root |
+| `full_path` | TEXT | R | Full name dirtree path |
 
 ```sql
 -- Create/set a name
@@ -152,6 +171,10 @@ INSERT INTO names (address, name) VALUES (0x401000, 'my_symbol');
 
 -- Rename
 UPDATE names SET name = 'my_symbol_renamed' WHERE address = 0x401000;
+
+-- Organize globals/labels into IDA name folders
+UPDATE names SET folder_path = 'idasql/names/globals' WHERE name LIKE 'g_%';
+UPDATE names SET folder_path = NULL WHERE address = 0x401000;
 ```
 
 ### entries
@@ -185,9 +208,9 @@ Decoded instructions support DELETE (converts instruction to unexplored bytes) a
 | `operand0..operand7` | TEXT | Operand text (`0..7`) |
 | `disasm` | TEXT | Full disassembly line |
 | `operand0_class..operand7_class` | TEXT | Operand class: `reg`, `imm`, `displ`, `mem`, ... |
-| `operand0_repr_kind..operand7_repr_kind` | TEXT | Current representation: `plain`, `enum`, `stroff` |
-| `operand0_repr_type_name..operand7_repr_type_name` | TEXT | Enum name or stroff path |
-| `operand0_format_spec..operand7_format_spec` | TEXT (RW) | Apply/clear representation for a specific operand |
+| `operand0_repr_kind..operand7_repr_kind` | TEXT | Current representation: `plain`, `hex`, `dec`, `oct`, `bin`, `char`, `float`, `enum`, `offset`, `stroff`, `sizeof`, `segment`, `stkvar`, `forced` |
+| `operand0_repr_type_name..operand7_repr_type_name` | TEXT | Enum/stroff/sizeof type, offset base (hex), or forced text |
+| `operand0_format_spec..operand7_format_spec` | TEXT (RW) | Apply/clear representation for a specific operand (see vocabulary below) |
 
 ```sql
 -- Instruction profile of a function (FAST)
@@ -204,10 +227,71 @@ UPDATE instructions
 SET operand1_format_spec = 'enum:MY_ENUM'
 WHERE address = 0x401020;
 
+-- Apply struct-offset representation to operand 0
+-- e.g. makes `[rax+10h]` display as `[rax+command_t.field_name]`
+UPDATE instructions
+SET operand0_format_spec = 'stroff:command_t'
+WHERE address = 0x140001BE8;
+
+-- Struct-offset with a base delta (subtracted before member resolution)
+UPDATE instructions
+SET operand0_format_spec = 'stroff:command_t,delta=16'
+WHERE address = 0x140001BE8;
+
+-- Nested member path: separate type names with '/'
+UPDATE instructions
+SET operand0_format_spec = 'stroff:outer_t/inner_t'
+WHERE address = 0x140001BE8;
+
 -- Clear representation back to plain
 UPDATE instructions
 SET operand1_format_spec = 'clear'
 WHERE address = 0x401020;
+```
+
+The format-spec is verified after apply: the UPDATE re-reads the operand and
+fails (as a SQL error) if the resulting `repr_kind`, type path, or delta don't
+match what was requested. Read back `operandN_repr_kind` /
+`operandN_repr_type_name` to confirm.
+
+**Full `operandN_format_spec` vocabulary** (all disassembly-level, no IDAPython
+needed):
+
+| Spec | Effect |
+|---|---|
+| `hex` `dec` `oct` `bin` | number base (radix) |
+| `char` | character constant |
+| `float` | floating-point |
+| `offset` | plain offset, base 0 |
+| `offset:<base>` | offset with a user-defined base (`<base>` = symbol name or address) |
+| `enum:<NAME>[,serial=N]` / `enum:<NAME>::<MEMBER>` | enum constant |
+| `stroff:<Type[/Nested...]>[,delta=N]` | struct-member offset |
+| `sizeof:<STRUCT>` | struct-size constant — renders `size STRUCT` |
+| `segment` | segment selector |
+| `stkvar` | stack variable (operand must be a stack reference) |
+| `forced:<text>` | forced (manual) operand text, e.g. `forced:5 shl 3` |
+| `clear` / `plain` / `none` | revert to default representation |
+
+Combinable modifiers (suffix on any base, or standalone to modify the current
+representation): `,signed` / `,unsigned` (toggle negative display) and
+`,bnot` / `,nobnot` (toggle bitwise-not display). Example: `dec,signed`,
+`hex,bnot`, or just `signed`.
+
+```sql
+-- Number base, character, and sign/bitwise-not modifiers
+UPDATE instructions SET operand1_format_spec = 'hex'        WHERE address = 0x401020;
+UPDATE instructions SET operand1_format_spec = 'dec,signed' WHERE address = 0x401020;
+UPDATE instructions SET operand1_format_spec = 'char'       WHERE address = 0x401020;
+
+-- Offsets (plain and user-defined base)
+UPDATE instructions SET operand1_format_spec = 'offset'            WHERE address = 0x401020;
+UPDATE instructions SET operand1_format_spec = 'offset:tbl_start'  WHERE address = 0x401020;
+
+-- sizeof: an immediate equal to sizeof(STRUCT) renders as `size STRUCT`
+UPDATE instructions SET operand1_format_spec = 'sizeof:FILEDEF' WHERE address = 0x4015EB;
+
+-- Forced operand text
+UPDATE instructions SET operand1_format_spec = 'forced:5 shl 3' WHERE address = 0x401020;
 ```
 
 ### instruction_operands
@@ -538,3 +622,11 @@ instruction_operands func    -> O(operands in one function)
 
 - For advanced CTE patterns and instruction lifecycle playbooks: [references/disassembly-examples.md](references/disassembly-examples.md)
 - For additional table schemas (fchunks, heads, bytes, signatures, problems, fixups, etc.): [references/disassembly-tables.md](references/disassembly-tables.md)
+
+---
+
+## See Also
+
+- `decompiler` — pseudocode and ctree on the same function; pivot when disassembly is too noisy.
+- `xrefs` — call graph and data references centered on a function or call site.
+- `data` — operand-targeted bytes/strings; `bytes` table for per-byte reads and bounded windows via `WHERE start_ea = X AND n = N` composed with `hex(blob_concat(value))` for bulk hex.

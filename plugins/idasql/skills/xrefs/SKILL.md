@@ -62,6 +62,18 @@ Interpretation guidance:
   - Resolve/verify address first through the `names` table or explicit EA literals.
 - Sparse results:
   - Pivot through `imports`, `strings`, or `disasm_calls` joins.
+- Target lives inside a static struct or dispatch table:
+  - In modern binaries a string/data target is often referenced from a
+    registration or vtable, not from code. `xrefs WHERE to_ea = X` may then
+    return only `.rdata` rows. Walk back to the table head, then re-query
+    xrefs against the *table's* address.
+    ```sql
+    -- 1) find the head of the item that contains the target
+    SELECT address FROM heads
+    WHERE address <= 0x140027D50 ORDER BY address DESC LIMIT 1;
+    -- 2) xrefs into the table head (where the code consumer points)
+    SELECT * FROM xrefs WHERE to_ea = <head> AND is_code = 1;
+    ```
 
 ---
 
@@ -103,10 +115,17 @@ Imported functions from external libraries.
 | `name` | TEXT | Import name |
 | `module` | TEXT | Module/DLL name |
 | `ordinal` | INT | Import ordinal |
+| `folder_path` | TEXT | Writable import folder path |
+| `full_path` | TEXT | Full import dirtree path |
 
 ```sql
 -- Imports from kernel32.dll
 SELECT name FROM imports WHERE module LIKE '%kernel32%';
+
+-- Organize network-related imports
+UPDATE imports
+SET folder_path = 'idasql/imports/network'
+WHERE name LIKE '%socket%' OR name LIKE '%connect%' OR name LIKE '%send%';
 ```
 
 ---
@@ -599,3 +618,11 @@ WHERE NOT EXISTS (
 )
 ORDER BY f.size DESC;
 ```
+
+---
+
+## See Also
+
+- `disassembly` — call-site context (`disasm_at`, `disasm_calls`, operand-level reads).
+- `data` — string/data targets behind a `to_ea`; the canonical pivot when xrefs returns `.rdata`-only rows.
+- `decompiler` — calling-code logic and indirect-call resolution via callee types.

@@ -26,12 +26,25 @@ not end in `.idb`/`.i64`, idalib runs auto-analysis and rebuilds the string list
 first open. No `idat -A -B` / `ida -B` pre-step is needed.
 
 ```bash
-idasql -s sample.exe --http 8081
+idasql -s sample.exe --http 8080
 idasql -s sample.dll -q "SELECT * FROM welcome"
 idasql -s firmware.bin -i
 ```
 
 Add `--write` (or `-w`) if you want the freshly analyzed database persisted on exit.
+
+**Legacy 32-bit `.idb` upgrade**
+
+IDA 9.x idalib upgrades legacy 32-bit `.idb` files to sibling `.i64` files. idasql
+does not serve the empty upgraded live session. Instead it exits with code `3` and
+prints one stdout JSON object:
+
+```json
+{"status":"upgraded","input":"C:/tmp/prog.idb","reopen_with":"C:/tmp/prog.i64","upgrade_log":"C:/tmp/prog.id0.upgrade.log","message":"Database upgraded from 32-bit .idb to 64-bit .i64; reopen with -s <reopen_with>."}
+```
+
+Repeat the same command with `-s <reopen_with>`. In `--http` and `--mcp` modes,
+the process exits before binding a port.
 
 **1. Query or Script (Local)**
 ```bash
@@ -68,12 +81,12 @@ idasql -s database.i64 --export dump.sql --export-tables=funcs,segments
 
 | Option | Description |
 |--------|-------------|
-| `-s <file>` | IDA database (`.idb`/`.i64`) **or** raw binary (`.exe`/`.dll`/firmware/etc.) — raw binaries trigger fresh idalib analysis and string-list rebuild |
+| `-s <file>` | IDA database (`.idb`/`.i64`) **or** raw binary (`.exe`/`.dll`/firmware/etc.) — raw binaries trigger fresh idalib analysis and string-list rebuild; legacy 32-bit `.idb` may return `status:"upgraded"` with `reopen_with` |
 | `--token <token>` | Auth token for HTTP/MCP server mode |
 | `-q <sql>` | Execute SQL query or semicolon-separated script |
 | `-f <file>` | Execute SQL from file |
 | `-i` | Interactive REPL mode |
-| `-w, --write` | Save database changes on exit |
+| `-w, --write` | Save database changes on exit, including HTTP/MCP server shutdown |
 | `--export <file>` | Export tables to SQL file |
 | `--export-tables=X` | Tables to export: `*` (all) or `table1,table2,...` |
 | `--http [port]` | Start HTTP REST server (default: 8080, local mode only) |
@@ -90,13 +103,22 @@ idasql -s database.i64 --export dump.sql --export-tables=funcs,segments
 | `.tables` | List all virtual tables |
 | `.schema [table]` | Show table schema |
 | `.info` | Show database metadata |
-| `.clear` | Clear session |
 | `.quit` / `.exit` | Exit REPL |
 | `.help` | Show available commands |
-| `.http start` | Start HTTP server on random port |
+| `.http start` | Start HTTP server (reuses a pinned port when no port is given) |
 | `.http stop` | Stop HTTP server |
-| `.http status` | Show HTTP server status |
-| `.agent` | Start AI agent mode |
+| `.http` | Show HTTP server status (start if not running) |
+| `.pin` / `.pin list` | Show pinned autostart config |
+| `.pin set http\|mcp [bind] <port>` | Pin a server's host/port (port required); enables autostart |
+| `.pin on\|off http\|mcp` | Enable/disable autostart-on-load (keeps host/port) |
+| `.pin clear [http\|mcp\|all]` | Remove pinned config (default `all`) |
+
+> **Autostart pins.** A pin is stored in the IDB (netnode `$ idasql config`).
+> The `.pin` command works in both the CLI and the plugin — but **only the IDA
+> plugin auto-starts** pinned servers when the database is opened. `.http start`
+> / `.mcp start` with no explicit port reuse the pinned host/port. From the CLI,
+> `.pin` changes persist only when idasql is started with `-w/--write` (same as
+> any other IDB edit).
 
 ### Performance Strategy
 
@@ -125,6 +147,7 @@ curl -X POST http://localhost:8080/query -d "SELECT name, size FROM funcs ORDER 
 ```
 
 This approach is significantly faster for iterative analysis since the database remains open and queries go directly through the already-initialized session.
+Use `-w` for long-lived HTTP/MCP write sessions when edits should be saved on shutdown; otherwise writes are visible in the current process but must be flushed with `SELECT save_database()`.
 
 ---
 
@@ -158,20 +181,23 @@ For decompiler-heavy queries, `idasql` emits warnings that suggest adding `WHERE
 
 ## Database Modification
 
-Most write examples are documented next to their tables (`breakpoints`, `segments`, `names`, `instructions`, `types*`, `applied_types`, `disasm_calls`, `bookmarks`, `comments`, `ctree_lvars`, `ctree_labels`, `netnode_kv`).
+Most write examples are documented next to their tables (`breakpoints`, `segments`, `names`, `instructions`, `types*`, `applied_types`, `disasm_calls`, `dirtree_folders`, `bookmarks`, `comments`, `ctree_lvars`, `ctree_labels`, `netnode_kv`).
 Quick capability matrix:
 
 | Table | INSERT | UPDATE columns | DELETE |
 |-------|--------|---------------|--------|
-| `breakpoints` | Yes | `enabled`, `type`, `size`, `flags`, `pass_count`, `condition`, `group` | Yes |
-| `funcs` | Yes | `name`, `prototype`, `comment`, `rpt_comment`, `flags` | Yes |
-| `names` | Yes | `name` | Yes |
+| `breakpoints` | Yes | `enabled`, `type`, `size`, `flags`, `pass_count`, `condition`, `group`, `folder_path` | Yes |
+| `funcs` | Yes | `name`, `prototype`, `comment`, `rpt_comment`, `flags`, `folder_path` | Yes |
+| `names` | Yes | `name`, `folder_path` | Yes |
 | `comments` | Yes | `comment`, `rpt_comment` | Yes |
-| `bookmarks` | Yes | `description` | Yes |
+| `bookmarks` | Yes | `description`, `folder_path` | Yes |
 | `segments` | Yes | `name`, `class`, `perm` | Yes |
 | `instructions` | — | `operand0_format_spec` .. `operand7_format_spec` | Yes |
 | `bytes` | — | `value`, `word`, `dword`, `qword` | Yes (revert patch) |
-| `types` | Yes | Yes | Yes |
+| `types` | Yes | `name`, `folder_path`, plus type-table write columns | Yes |
+| `imports` | — | `folder_path` | — |
+| `local_type_bookmarks` | `ordinal`, `description` | `description`, `folder_path` | yes |
+| `dirtree_folders` | Yes (all standard dirtrees) | `path` rename/move | Yes, empty folders only |
 | `types_members` | Yes | Yes | Yes |
 | `types_enum_values` | Yes | Yes | Yes |
 | `applied_types` | Yes | `decl` | Yes |
@@ -186,6 +212,26 @@ Instruction creation uses SQL functions rather than `INSERT`:
 
 Function creation uses table INSERT (calls `add_func()`):
 - `INSERT INTO funcs(address) VALUES (...)`
+
+Folder organization uses object-table `folder_path` columns and `dirtree_folders`:
+
+```sql
+INSERT INTO dirtree_folders(tree, path) VALUES ('funcs', 'idasql/folder-lifecycle-demo');
+UPDATE funcs SET folder_path = 'idasql/folder-lifecycle-demo' WHERE address = 0x401000;
+UPDATE names SET folder_path = 'idasql/names/globals' WHERE address = 0x402000;
+UPDATE imports SET folder_path = 'idasql/imports/network' WHERE name LIKE '%socket%';
+UPDATE bookmarks SET folder_path = 'idasql/bookmarks/review' WHERE slot = 0;
+UPDATE breakpoints SET folder_path = 'idasql/breakpoints/watch' WHERE address = 0x401000;
+UPDATE dirtree_folders SET path = 'idasql/folder-lifecycle-renamed'
+WHERE tree = 'funcs' AND path = 'idasql/folder-lifecycle-demo';
+UPDATE funcs SET folder_path = NULL WHERE address = 0x401000;
+DELETE FROM dirtree_folders WHERE tree = 'funcs' AND path = 'idasql/folder-lifecycle-renamed';
+```
+
+`dirtree_entries` is read-only raw browsing for all standard trees (`funcs`, `local_types`, `names`, `imports`, `idaplace_bookmarks`, `bpts`, `ltypes_bookmarks`). Prefer `tree = ?` plus `path`, `parent_path`, or `inode` filters in raw queries.
+
+Folder writes use relative `/` paths. `NULL` or `''` moves object-table folder columns back to root. IDASQL rejects `.`/`..`, duplicate separators, backslashes, non-empty folder deletes, and folder renames whose destination already exists.
+Recursive folder delete and raw recovery/link operations are not exposed through SQL.
 
 Bulk byte loading from external files uses:
 - `SELECT load_file_bytes(path, file_offset, address, size[, patchable])`
@@ -220,13 +266,13 @@ IDASQL supports HTTP-based server modes for remote queries: **HTTP REST** and **
 Standard REST API for curl, Python, or any HTTP client.
 
 ```bash
-idasql -s database.i64 --http              # default port 8081
+idasql -s database.i64 --http              # default port 8080
 idasql -s database.i64 --http 9000         # custom port
 idasql -s database.i64 --http --token X    # with auth
 ```
 
 ```bash
-curl -X POST http://localhost:8081/query -d "SELECT name, size FROM funcs LIMIT 5"
+curl -X POST http://localhost:8080/query -d "SELECT name, size FROM funcs LIMIT 5"
 ```
 
 For endpoints, Python automation patterns, response format, and compatibility notes, see `references/server-guide.md`.

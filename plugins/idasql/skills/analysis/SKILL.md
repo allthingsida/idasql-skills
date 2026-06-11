@@ -97,6 +97,7 @@ Then route to `annotations` for the edit pass. Success markers for a review-read
 - typed signature and clearer field access
 - named locals, globals, and labels
 - one heading-style summary comment near function start
+- folder placement when the function belongs to a durable triage/review bucket
 - less raw pointer math and fewer generic temp names
 
 Treat that summary comment as part of the analysis product, not just presentation polish:
@@ -135,6 +136,15 @@ SELECT * FROM imports WHERE name LIKE '%Crypt%' OR name LIKE '%Hash%';
 
 -- Network-related
 SELECT * FROM imports WHERE name LIKE '%socket%' OR name LIKE '%connect%' OR name LIKE '%send%';
+
+-- File likely network triage candidates under a durable folder
+INSERT INTO dirtree_folders(tree, path) VALUES ('funcs', 'idasql/triage/network');
+UPDATE funcs
+SET folder_path = 'idasql/triage/network'
+WHERE address IN (
+  SELECT DISTINCT func_addr FROM disasm_calls
+  WHERE callee_name LIKE '%socket%' OR callee_name LIKE '%connect%' OR callee_name LIKE '%send%'
+);
 ```
 
 ### "Understand a specific function"
@@ -367,3 +377,11 @@ JOIN imports i ON dc.callee_addr = i.address
 WHERE cg.start = 0x401000 AND cg.direction = 'down' AND cg.max_depth = 5
 ORDER BY kind, detail;
 ```
+
+---
+
+## See Also
+
+- `xrefs` — convert call/data signals into caller/callee chains.
+- `data` — strings, imports, and byte patterns as triage evidence.
+- `decompiler` — drill into suspicious functions identified by triage queries.

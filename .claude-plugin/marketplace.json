@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "idasql",
-      "version": "0.0.16",
+      "version": "0.0.17",
       "description": "SQL interface to IDA Pro databases for querying and CRUD operations on functions, xrefs, strings, and decompiled code",
       "author": {
         "name": "Elias Bachaalany",

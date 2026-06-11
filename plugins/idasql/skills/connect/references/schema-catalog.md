@@ -13,9 +13,9 @@ Manual refresh procedure:
 |---------|------|-------------|------|----------|-------|
 | `applied_types` | virtual | types | 4 | INSERT / UPDATE (`decl`) / DELETE | Address equality accepts EA, numeric string, or symbol name; point lookup can synthesize an untyped mapped row; ranges return typed rows only |
 | `blocks` | virtual | disassembly | 4 | — | Filter by `func_ea` |
-| `bookmarks` | virtual | annotations | 3 | INSERT/UPDATE/DELETE | |
-| `breakpoints` | virtual | debugger | 19 | INSERT/UPDATE/DELETE | |
-| `bytes` | virtual | disassembly | 8 | UPDATE (`value`/`word`/`dword`/`qword`) / DELETE (revert patch) | Pure mapped-byte rows; filter by `ea` or tight ranges; `WHERE is_patched = 1` enumerates patches fast |
+| `bookmarks` | virtual | annotations | 6 | INSERT/UPDATE/DELETE | Writable: `description`, `folder_path`; `inode` and `full_path` are read-only |
+| `breakpoints` | virtual | debugger | 21 | INSERT/UPDATE/DELETE | Writable: `enabled`, `type`, `size`, `flags`, `pass_count`, `condition`, `group`, `folder_path`; `folder_path` aliases IDA breakpoint group |
+| `bytes` | virtual | data / debugger | 8 (+ hidden `start_ea`, `n`) | UPDATE (`value`/`word`/`dword`/`qword`) / DELETE (revert patch) | Pure mapped-byte rows; filter by `ea` (point), `WHERE start_ea = X AND n = N` (bounded read; `start_ea` is a separate hidden input so predicates on `ea` stay enforceable), or tight `ea` ranges; `WHERE is_patched = 1` enumerates patches fast. Bulk hex: `hex(blob_concat(value))`. Bulk BLOB: `blob_concat(value)`. |
 | `call_graph` | virtual (TVF) | xrefs | 4 | — | `start` HIDDEN, `direction` HIDDEN, `max_depth` HIDDEN → func_addr, func_name, depth, parent_addr |
 | `cfg_edges` | virtual | disassembly | 4 | — | Filter by `func_ea` (filter_eq pushdown) |
 | `comments` | virtual | annotations | 3 | INSERT/UPDATE/DELETE | |
@@ -24,22 +24,25 @@ Manual refresh procedure:
 | `ctree_lvars` | virtual | decompiler | 12 | UPDATE (`name`, `type`, `comment`) | Filter by `func_addr` |
 | `data_refs` | virtual | xrefs | 5 | — | Cached table of non-code xrefs with containing function info |
 | `db_info` | virtual | disassembly | 3 | — | |
+| `dirtree_entries` | virtual | annotations / disassembly / types | 11 | — | Raw IDA dirtree listing for `funcs`, `local_types`, `names`, `imports`, `idaplace_bookmarks`, `bpts`, `ltypes_bookmarks`; push down `tree`, `path`, `path LIKE`, `parent_path`, `inode`, `is_dir`, `is_file` |
+| `dirtree_folders` | virtual | annotations / types | 3 | INSERT / UPDATE (`path`) / DELETE for all standard dirtrees | Empty folder lifecycle for `funcs`, `local_types`, `names`, `imports`, `idaplace_bookmarks`, `bpts`, `ltypes_bookmarks`; DELETE removes only empty folders |
 | `disasm_calls` | virtual | disassembly | 5 | UPDATE (`callee_type`) | Filter by `func_addr` — generator; `ea` identifies call-site writes |
 | `disasm_loops` | virtual | disassembly | 6 | — | |
 | `entries` | virtual | disassembly | 3 | — | |
 | `fchunks` | virtual | disassembly | 6 | — | |
 | `fixups` | virtual | disassembly | 4 | — | |
-| `funcs` | virtual | disassembly | 15 | INSERT/UPDATE/DELETE | Writable: `name`, `prototype`, `comment`, `rpt_comment`, `flags` |
+| `funcs` | virtual | disassembly / annotations | 17 | INSERT/UPDATE/DELETE | Writable: `name`, `prototype`, `comment`, `rpt_comment`, `flags`, `folder_path`; `full_path` is read-only |
 | `function_chunks` | virtual | disassembly | 5 | — | Cached table; one row per function chunk |
 | `grep` | virtual | grep | 7 | — | Requires `pattern` |
 | `heads` | virtual | disassembly | 5 | — | Optimized `address =` and address range/order navigation |
 | `hidden_ranges` | virtual | disassembly | 8 | — | |
 | `ida_info` | virtual | disassembly | 3 | — | |
-| `imports` | virtual | xrefs | 5 | — | |
+| `imports` | virtual | xrefs | 7 | UPDATE (`folder_path`) | Import folder moves do not change module/name/ordinal |
+| `local_type_bookmarks` | virtual | types / annotations | 7 | INSERT (`ordinal`,`description`), UPDATE (`description`,`folder_path`), DELETE | Enumerates the `bookmarks_t` store; INSERT marks a bookmark at a local-type ordinal. Folder moves require an already-linked bookmark |
 | `instructions` | virtual | disassembly | 70 | UPDATE (format_spec) / DELETE | Filter by `func_addr` |
 | `local_types` | virtual | types | 6 | — | |
 | `mappings` | virtual | disassembly | 3 | — | |
-| `names` | virtual | disassembly | 4 | INSERT/UPDATE/DELETE | |
+| `names` | virtual | disassembly | 6 | INSERT/UPDATE/DELETE | Writable: `name`, `folder_path`; `full_path` is read-only |
 | `problems` | virtual | disassembly | 4 | — | |
 | `pseudocode` | virtual | decompiler | 6 | UPDATE (`comment`, `comment_placement`) | Filter by `func_addr` |
 | `pseudocode_orphan_comments` | virtual | decompiler | 5 | UPDATE (`orphan_comment`, delete-only) | Filter by `func_addr` |
@@ -48,11 +51,11 @@ Manual refresh procedure:
 | `shortest_path` | virtual (TVF) | xrefs | 3 | — | `from_addr` HIDDEN, `to_addr` HIDDEN, `max_depth` HIDDEN → step, func_addr, func_name |
 | `signatures` | virtual | disassembly | 4 | — | |
 | `strings` | virtual | data | 10 | — | Use `rebuild_strings()` first; `COUNT(*)` uses optimized count path |
-| `types` | virtual | types | 14 | INSERT/UPDATE/DELETE | |
+| `types` | virtual | types | 16 | INSERT/UPDATE/DELETE | Writable: `name`, `folder_path`; `full_path` is read-only |
 | `types_enum_values` | virtual | types | 7 | INSERT/UPDATE/DELETE | Filter by `type_ordinal` |
 | `types_func_args` | virtual | types | 22 | — | Filter by `type_ordinal` |
 | `types_members` | virtual | types | 18 | INSERT/UPDATE/DELETE | Filter by `type_ordinal` |
-| `welcome` | virtual | connect | 11 | — | Includes `strings_count` for orientation; use `COUNT(*) FROM strings` for canonical string count queries |
+| `welcome` | virtual | connect | 17 | — | Includes `idasql_version` (IDASQL build version) and `strings_count` for orientation (use `COUNT(*) FROM strings` for canonical string counts) plus file-identity columns `filename`, `input_file_path`, `idb_path`, `md5`, `sha256` |
 | `xrefs` | virtual | xrefs | 5 | — | Filter by `to_ea` or `from_ea`; includes `from_func` |
 | `netnode_kv` | virtual | storage | 2 | INSERT/UPDATE/DELETE | O(1) key lookup |
 | `ctree_labels` | virtual | decompiler | 6 | UPDATE (`name`) | Filter by `func_addr` |
@@ -82,14 +85,17 @@ Manual refresh procedure:
 | `disasm_v_funcs_with_loops` | disassembly | 3 | |
 | `disasm_v_leaf_funcs` | disassembly | 2 | |
 | `string_refs` | xrefs | 6 | string_addr, string_value, string_length, ref_addr, func_addr, func_name |
-| `types_v_enums` | types | 14 | |
-| `types_v_funcs` | types | 14 | |
+| `types_v_enums` | types | 16 | |
+| `types_v_funcs` | types | 16 | |
 | `types_v_inheritance` | types | 5 | derived_ordinal, derived_name, base_type_name, base_ordinal, base_offset |
-| `types_v_structs` | types | 14 | |
-| `types_v_typedefs` | types | 14 | |
-| `types_v_unions` | types | 14 | |
+| `types_v_structs` | types | 16 | |
+| `types_v_typedefs` | types | 16 | |
+| `types_v_unions` | types | 16 | |
 
 ## Runtime Notes
 
 - Some builds expose additional surfaces (e.g., `netnode_kv`) not present in every runtime.
 - When a surface is absent in `pragma_table_list`, treat it as runtime-optional.
+- Prefer object-table `folder_path` columns for normal organization workflows: `funcs`, `types`, `names`, `imports`, `bookmarks`, `breakpoints`, and `local_type_bookmarks`. Use `dirtree_entries` for raw tree inspection and `dirtree_folders` for empty-folder lifecycle.
+- Folder writes accept relative `/` paths and reject `.`/`..`, duplicate separators, backslashes, non-empty folder deletes, and folder renames whose destination already exists.
+- `dirtree_entries` is read-only. Recursive folder delete and recovery/link primitives are intentionally not part of the SQL surface.

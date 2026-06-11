@@ -46,27 +46,32 @@ INSERT INTO funcs (address) VALUES (0x401000);
 
 ## Byte Access and Patching
 
+Byte reads, bulk reads, and patching all go through the `bytes` table.
+`load_file_bytes(...)` writes a host file's bytes into the IDB at a given
+range; it returns `1` on success, `0` on failure.
+
 | Function | Description |
 |----------|-------------|
-| `bytes(addr, n)` | Read `n` raw bytes as hex string |
-| `bytes_raw(addr, n)` | Read `n` bytes as BLOB |
-| `load_file_bytes(path, file_offset, address, size[, patchable])` | Load bytes from a host file into IDB memory/file image |
-
-Patching is done through the writable `bytes` table, not scalar functions:
-UPDATE `value`/`word`/`dword`/`qword` to patch, `original_value` for the
-pre-patch byte, `WHERE is_patched = 1` to enumerate, DELETE to revert.
+| `load_file_bytes(path, file_offset, address, size[, patchable])` | Write host file bytes into IDB memory at the target range |
+| `blob_concat(value)` | libxsql aggregate — concatenate byte values into one BLOB |
 
 ```sql
-SELECT bytes(0x401000, 16);
-UPDATE bytes SET value = 0x90 WHERE ea = 0x401000;       -- patch 1 byte
-UPDATE bytes SET dword = 0x90909090 WHERE ea = 0x401000; -- patch 4 bytes (LE)
+-- Read 16 bytes as uppercase hex
+SELECT hex(blob_concat(value))
+FROM (SELECT value FROM bytes WHERE start_ea = 0x401000 AND n = 16 ORDER BY ea);
+
+-- Read 64 bytes as BLOB
+SELECT blob_concat(value)
+FROM (SELECT value FROM bytes WHERE start_ea = 0x401000 AND n = 64 ORDER BY ea);
+
+-- Patch 1 byte and 4 LE bytes
+UPDATE bytes SET value = 0x90 WHERE ea = 0x401000;
+UPDATE bytes SET dword = 0x90909090 WHERE ea = 0x401000;
 SELECT value AS current, original_value AS original FROM bytes WHERE ea = 0x401000;
 DELETE FROM bytes WHERE ea = 0x401000;                   -- revert
 ```
 
-`load_file_bytes(...)` is intended for file-driven bulk patching workflows. It returns `1` on success, `0` on failure.
-
-For composable row-shaped reads or patching, use the pure `bytes` table:
+For composable row-shaped reads use the `bytes` table directly:
 `SELECT ea, value FROM bytes WHERE ea >= :start AND ea < :end ORDER BY ea`.
 Use `heads` for item size/type metadata.
 
@@ -224,9 +229,10 @@ Note: `INSERT` at an address that already has a comment **replaces** it (one com
 | `parse_decls(text)` | Import C declarations (struct/union/enum/typedef) into local types |
 
 Preferred SQL write surface for function metadata:
-- `UPDATE funcs SET name = '...', prototype = '...' WHERE address = ...`
+- `UPDATE funcs SET name = '...', prototype = '...', folder_path = 'idasql/review/annotated' WHERE address = ...`
 - `INSERT INTO names(address, name) VALUES (..., '...')` or `UPDATE names SET name = '...' WHERE address = ...`
 - `prototype` maps to `applied_types` behavior and invalidates decompiler cache.
+- `folder_path` moves functions in IDA's Function window tree; create/rename/delete empty folders through `dirtree_folders`.
 - For per-call indirect-call typing, update `disasm_calls.callee_type`.
 
 ---
@@ -255,7 +261,7 @@ SELECT idapython_snippet('counter = globals().get("counter", 0) + 1; print(count
 
 | Function | Description |
 |----------|-------------|
-| `get_ui_context_json()` | Return current UI/widget/context JSON for context-aware prompts (plugin-only) |
+| `get_ui_context_json()` | Return current UI/widget/context JSON for context-aware prompts (registered everywhere; live UI in the GUI plugin, a `source:"cli"` stub under idalib/CLI) |
 
 ```sql
 SELECT get_ui_context_json();
@@ -392,3 +398,10 @@ SELECT rebuild_strings();
 SELECT rebuild_strings(4);
 SELECT rebuild_strings(5, 7);
 ```
+
+---
+
+## See Also
+
+- `connect` — front-door catalog and routing matrix; use when picking a skill, not a function.
+- The relevant per-topic skill for any function (`data` for bytes/strings, `decompiler` for `decompile()`, `disassembly` for `disasm_*`, `types` for `parse_decls`, `debugger` for patching helpers).
