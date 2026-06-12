@@ -130,7 +130,7 @@ idasql -s database.i64 -q "SELECT COUNT(*) FROM funcs"
 idasql -s database.i64 -q "SELECT * FROM welcome; SELECT COUNT(*) FROM funcs;"
 ```
 
-**Iterative exploration:** Start a server once, then query repeatedly over HTTP. Each HTTP `/query` body may also be a semicolon-separated script; single statements keep the legacy JSON shape, while scripts return `statements[]`.
+**Iterative exploration:** Start a server once, then query repeatedly over HTTP. Each HTTP `/query` body may also be a semicolon-separated script; every response uses the canonical `results[]` envelope (a single statement is an array of one).
 
 Opening an IDA database has startup overhead (idalib initialization, auto-analysis). If you plan to run many queries—exploring the database, experimenting with different queries, or iterating on analysis—avoid re-opening the database each time.
 
