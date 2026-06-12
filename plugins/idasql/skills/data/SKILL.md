@@ -141,8 +141,8 @@ LIMIT 10;
 
 ## `bytes` Table — Reads, Patches, and Bounded Windows
 
-**All byte access goes through the `bytes` table.** The hidden `start_ea`
-+ `n` input columns pair up for bounded reads; bulk hex uses
+**All byte access goes through the `bytes` table.** The hidden `start_ea` and
+`n` input columns pair up for bounded reads; bulk hex uses
 `hex(blob_concat(value))`, bulk BLOB uses `blob_concat(value)`.
 
 | Shape | SQL |
