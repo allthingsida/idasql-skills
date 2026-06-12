@@ -159,27 +159,50 @@ This same pattern works in any language with HTTP support (JavaScript, PowerShel
 
 ## Response Format (JSON)
 
-Single statements keep the standard response shape:
+**Every `/query` response uses the canonical script envelope** \u2014 even a single
+statement is returned as an array of one under `results[]`. There is no
+separate top-level `rows`/`columns` shape and no `statements[]` key.
 
 ```json
-{"success": true, "columns": ["name", "size"], "rows": [["main", "500"]], "row_count": 1}
+{
+  "success": true,
+  "statement_count": 1,
+  "results": [
+    {"statement_index": 0, "success": true,
+     "columns": ["name", "size"], "rows": [["main", "500"]],
+     "row_count": 1, "elapsed_ms": 0, "error": null}
+  ],
+  "row_count_total": 1,
+  "elapsed_ms_total": 0,
+  "first_error_index": null
+}
 ```
 
-Semicolon-separated scripts return one result object per statement:
+A semicolon-separated script returns one entry per statement in `results[]`:
 
 ```json
-{"success": true, "statements": [{"columns": ["summary"], "rows": [["..."]], "row_count": 1}, {"columns": ["COUNT(*)"], "rows": [["42"]], "row_count": 1}], "statement_count": 2}
+{
+  "success": true,
+  "statement_count": 2,
+  "results": [
+    {"statement_index": 0, "success": true, "columns": ["summary"], "rows": [["..."]], "row_count": 1, "error": null},
+    {"statement_index": 1, "success": true, "columns": ["COUNT(*)"], "rows": [["42"]], "row_count": 1, "error": null}
+  ],
+  "row_count_total": 2,
+  "first_error_index": null
+}
 ```
 
-```json
-{"success": false, "error": "no such table: bad_table"}
-```
+On a statement error, that entry's `success` is `false` and `error` carries the
+message; top-level `success` is `false` and `first_error_index` points at the
+first failing statement. Fail-fast is the default \u2014 pass `?continue_on_error=1`
+to run every statement regardless.
 
 ## Compatibility Notes
 
-- Most builds include `success` in both success and error responses.
-- Some builds may omit `success` on successful responses and return only `columns`, `rows`, and `row_count`.
-- Multi-statement support is additive: clients that only send one SQL statement can continue to read top-level `rows`.
-- Clients that send scripts must read `statements[]`; each entry has its own `columns`, `rows`, and `row_count`.
-- Invalid/non-UTF8 bytes in query results are escaped in JSON-safe form (for example `\u0097`) rather than crashing the response.
-- In clients, check for `error` first, then consume rows with `payload.get("rows", [])` to avoid `KeyError`.
+- The shape is identical regardless of statement count \u2014 always read
+  `results[i].columns` / `results[i].rows`, never a top-level `rows`.
+- Check per-statement status via `results[i].success` / `results[i].error`, or
+  `first_error_index` for the first failure.
+- Invalid/non-UTF8 bytes in query results are escaped in JSON-safe form (for
+  example `\u0097`) rather than crashing the response.
