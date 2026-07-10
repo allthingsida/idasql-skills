@@ -127,6 +127,24 @@ PRAGMA table_xinfo(xrefs);
 
 ---
 
+## Cursor Transport Preference
+
+When running inside Cursor, pick a transport in this order:
+
+1. **MCP** — if Cursor has an `idasql` MCP server configured and connected, prefer the `idasql_query` tool for SQL (same script envelope / `continue_on_error` semantics as HTTP).
+2. **Shell** — otherwise run `idasql -s <file> -q "..."` (or `-f`) for one-shot queries. Use `--write` when mutations must persist.
+3. **HTTP** — if a server is already up (`idasql -s <file> --http <port>` or `.http start` in the IDA plugin), `POST` SQL to `/query` and consume the JSON envelope directly.
+
+MCP is database-bound: start it yourself before Cursor can connect:
+
+```bash
+idasql -s database.i64 --mcp 9500
+```
+
+Then point Cursor at the SSE URL (user or project `mcp.json`). See `plugins/idasql/mcp.json.example` for a template. Do not ship a live plugin `mcp.json` — the port and database are per-session.
+
+---
+
 ## Global Agent Contracts
 
 These contracts apply across all idasql skills and should be treated as one shared agent behavior model.

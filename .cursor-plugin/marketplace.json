@@ -1,0 +1,33 @@
+{
+  "name": "allthingsida",
+  "owner": {
+    "name": "All Things IDA",
+    "email": "elias.bachaalany@gmail.com"
+  },
+  "metadata": {
+    "description": "IDASQL skills for reverse engineering IDA Pro databases via SQL",
+    "pluginRoot": "plugins"
+  },
+  "plugins": [
+    {
+      "name": "idasql",
+      "source": "idasql",
+      "description": "SQL interface to IDA Pro databases for querying and CRUD operations on functions, xrefs, strings, and decompiled code",
+      "version": "0.0.17",
+      "author": {
+        "name": "Elias Bachaalany",
+        "email": "elias.bachaalany@gmail.com"
+      },
+      "homepage": "https://github.com/allthingsida/idasql",
+      "repository": "https://github.com/allthingsida/idasql-skills",
+      "license": "MPL-2.0",
+      "keywords": [
+        "ida",
+        "reverse-engineering",
+        "sql",
+        "decompilation"
+      ],
+      "category": "Reverse Engineering"
+    }
+  ]
+}
