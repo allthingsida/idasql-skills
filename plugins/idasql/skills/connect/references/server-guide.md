@@ -19,13 +19,18 @@ idasql -s database.i64 --http 8080 --token mysecret
 
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
-| `/` | GET | No | Welcome message |
+| `/` | GET | No | Server greeting |
 | `/help` | GET | No | API documentation (for LLM discovery) |
 | `/query` | POST | Yes* | Execute SQL query or semicolon-separated script (body = raw SQL) |
 | `/status` | GET | Yes* | Health check |
 | `/shutdown` | POST | Yes* | Stop server |
 
 *Auth required only if `--token` was specified.
+
+> **The `/query` body is the raw SQL itself — not a JSON object.** Send the SQL
+> as the request body (`-d "SELECT …"`); do **not** wrap it as `{"sql":"…"}`. A
+> JSON wrapper is handed verbatim to SQLite and fails with
+> `unrecognized token "{"`. (The *response* is JSON: `{success, results:[…]}`.)
 
 ## Example with curl
 
@@ -37,7 +42,7 @@ curl http://localhost:8080/help
 curl -X POST http://localhost:8080/query -d "SELECT name, size FROM funcs LIMIT 5"
 
 # Execute a short SQL script
-curl -X POST http://localhost:8080/query -d "SELECT * FROM welcome; SELECT COUNT(*) FROM funcs;"
+curl -X POST http://localhost:8080/query -d "SELECT * FROM binary; SELECT COUNT(*) FROM funcs;"
 
 # With authentication
 curl -X POST http://localhost:8080/query \
@@ -70,13 +75,14 @@ def post_sql(sql: str):
         raise RuntimeError(f"SQL failed: {j.get('error')} | {sql}")
     return j
 
-# Pattern 1: single query
-rows = post_sql("SELECT name, size FROM funcs LIMIT 5").get("rows", [])
+# Pattern 1: single query (single statement is results[0])
+results = post_sql("SELECT name, size FROM funcs LIMIT 5").get("results", [])
+rows = results[0].get("rows", []) if results else []
 print(rows)
 
 # Pattern 1b: semicolon-separated script
-script_payload = post_sql("SELECT * FROM welcome; SELECT COUNT(*) FROM funcs;")
-for statement in script_payload.get("statements", []):
+script_payload = post_sql("SELECT * FROM binary; SELECT COUNT(*) FROM funcs;")
+for statement in script_payload.get("results", []):
     print(statement.get("columns", []), statement.get("rows", []))
 ```
 
@@ -100,25 +106,26 @@ def post_sql(sql: str):
 
 # Pattern 2: batch mutation + refresh
 func = 0x180021137
-# Each ea below must already be a resolved writable pseudocode anchor from a
+# Each addr below must already be a resolved writable pseudocode anchor from a
 # prior inspection pass. Do not use guessed function-entry eas.
 updates = [
     (0x180021798, "key%5 selects junk prefix byte"),
     (0x1800217C4, "store thunk address in IAT slot"),
 ]
 
-for ea, comment in updates:
+for addr, comment in updates:
     safe = comment.replace("'", "''")
     sql = (
         "UPDATE pseudocode SET comment = '{c}' "
-        "WHERE func_addr = {f} AND ea = {ea};"
-    ).format(c=safe, f=func, ea=ea)
+        "WHERE func_addr = {f} AND addr = {addr};"
+    ).format(c=safe, f=func, addr=addr)
     post_sql(sql)
 
 # Refresh and re-read for verification
 post_sql(f"SELECT decompile({func}, 1);")
-check = post_sql(f"SELECT ea, comment FROM pseudocode WHERE func_addr = {func};")
-print(f"Verified rows: {len(check.get('rows', []))}")
+check = post_sql(f"SELECT addr, comment FROM pseudocode WHERE func_addr = {func};")
+check_rows = check.get("results", [{}])[0].get("rows", [])
+print(f"Verified rows: {len(check_rows)}")
 ```
 
 ```python
@@ -137,14 +144,15 @@ def post_sql(sql: str):
         raise RuntimeError(f"SQL failed: {j.get('error')} | {sql}")
     return j
 
-# Pattern 3: pseudocode dump without KeyError('rows')
+# Pattern 3: pseudocode dump reading results[0].rows
 sql = (
-    "SELECT line_num, printf('0x%X', ea) AS ea, line "
+    "SELECT line_num, printf('0x%X', addr) AS addr, line "
     "FROM pseudocode WHERE func_addr = 0x180004344"
 )
 payload = post_sql(sql)
-for line_num, ea, line in payload.get("rows", []):
-    print(f"{str(line_num):>3} | {ea:18} | {line}")
+rows = payload.get("results", [{}])[0].get("rows", [])
+for line_num, addr, line in rows:
+    print(f"{str(line_num):>3} | {addr:18} | {line}")
 ```
 
 ## Light Guardrails for Scripted Clients

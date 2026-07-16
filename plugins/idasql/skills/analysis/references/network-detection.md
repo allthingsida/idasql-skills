@@ -18,9 +18,9 @@ WHERE name IN ('WSAStartup', 'WSACleanup', 'WSAGetLastError',
                'WSASocketW', 'WSAConnect', 'WSASend', 'WSARecv');
 
 -- Functions using sockets
-SELECT DISTINCT (SELECT name FROM funcs WHERE dc.func_addr >= address AND dc.func_addr < end_ea LIMIT 1) as func_name
+SELECT DISTINCT (SELECT name FROM funcs WHERE dc.func_addr >= addr AND dc.func_addr < end_addr LIMIT 1) as func_name
 FROM disasm_calls dc
-JOIN imports i ON dc.callee_addr = i.address
+JOIN imports i ON dc.callee_addr = i.addr
 WHERE i.name IN ('socket', 'connect', 'send', 'recv', 'bind', 'listen', 'accept')
 ORDER BY func_name;
 ```
@@ -34,12 +34,12 @@ WHERE name LIKE 'curl_%'
 ORDER BY name;
 
 -- curl strings
-SELECT content, printf('0x%X', address) as addr FROM strings
+SELECT content, printf('0x%X', addr) as addr FROM strings
 WHERE content LIKE '%curl%' OR content LIKE '%libcurl%'
    OR content LIKE '%CURLOPT%';
 
 -- URL strings
-SELECT content, printf('0x%X', address) as addr FROM strings
+SELECT content, printf('0x%X', addr) as addr FROM strings
 WHERE content LIKE 'http://%' OR content LIKE 'https://%'
    OR content LIKE 'ftp://%' OR content LIKE 'ws://%';
 ```
@@ -61,19 +61,19 @@ ORDER BY name;
 WITH net_imports AS (
     SELECT func_addr, callee_name as api, 'import' as source
     FROM disasm_calls dc
-    JOIN imports i ON dc.callee_addr = i.address
+    JOIN imports i ON dc.callee_addr = i.addr
     WHERE i.name IN ('socket', 'connect', 'send', 'recv', 'WSAStartup')
        OR i.name LIKE 'WinHttp%' OR i.name LIKE 'Internet%'
        OR i.name LIKE 'curl_%'
 ),
 net_strings AS (
-    SELECT x.from_ea as func_addr, s.content as api, 'string' as source
+    SELECT x.from_addr as func_addr, s.content as api, 'string' as source
     FROM strings s
-    JOIN xrefs x ON x.to_ea = s.address
+    JOIN xrefs x ON x.to_addr = s.addr
     WHERE s.content LIKE 'http://%' OR s.content LIKE 'https://%'
        OR s.content LIKE '%User-Agent%' OR s.content LIKE '%Content-Type%'
 )
-SELECT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) as function, api, source
+SELECT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) as function, api, source
 FROM (SELECT * FROM net_imports UNION ALL SELECT * FROM net_strings)
 ORDER BY function;
 ```

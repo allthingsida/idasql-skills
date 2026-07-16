@@ -34,13 +34,13 @@ typedef struct AnnotSession { unsigned int state; AnnotMode mode; AnnotPayload c
 -- 3. Apply the function prototype and global names/types
 UPDATE funcs
 SET prototype = 'int __fastcall dispatch_request(AnnotSession *session, AnnotRequest *request);'
-WHERE address = 0x14000107E;
+WHERE addr = 0x14000107E;
 
--- INSERT replaces any existing name at the EA (upsert); UPDATE names SET name = ... WHERE address = ... is equivalent.
-INSERT INTO names(address, name) VALUES (0x1400050C0, 'g_last_status');
-INSERT INTO applied_types(address, decl) VALUES (0x1400050C0, 'int g_last_status;');
-INSERT INTO names(address, name) VALUES (0x1400050C8, 'g_trace');
-INSERT INTO applied_types(address, decl) VALUES (0x1400050C8, 'unsigned __int64 g_trace;');
+-- INSERT replaces any existing name at the EA (upsert); UPDATE names SET name = ... WHERE addr = ... is equivalent.
+INSERT INTO names(addr, name) VALUES (0x1400050C0, 'g_last_status');
+INSERT INTO applied_types(addr, decl) VALUES (0x1400050C0, 'int g_last_status;');
+INSERT INTO names(addr, name) VALUES (0x1400050C8, 'g_trace');
+INSERT INTO applied_types(addr, decl) VALUES (0x1400050C8, 'unsigned __int64 g_trace;');
 
 -- 4. Refresh once so typed ctree/lvars reflect the new declarations
 SELECT decompile(0x14000107E, 1);
@@ -79,7 +79,7 @@ WHERE func_addr = 0x14000107E AND label_num = 13;
 -- 6. Add one repeatable function comment summary
 UPDATE funcs
 SET rpt_comment = 'Apply a request to a session and mirror the result into the globals.'
-WHERE address = 0x14000107E;
+WHERE addr = 0x14000107E;
 
 -- 7. Refresh once and verify the final readable form
 SELECT decompile(0x14000107E, 1);
@@ -102,8 +102,8 @@ Add comments to every call site of a security-sensitive function:
 ```sql
 -- Annotate every call to malloc with a reminder comment
 UPDATE pseudocode SET comment = 'TODO: verify allocation size'
-WHERE ea IN (
-    SELECT ea FROM disasm_calls WHERE callee_name LIKE '%malloc%'
+WHERE addr IN (
+    SELECT addr FROM disasm_calls WHERE callee_name LIKE '%malloc%'
 )
 AND func_addr IN (
     SELECT DISTINCT func_addr FROM disasm_calls WHERE callee_name LIKE '%malloc%'
@@ -116,11 +116,11 @@ Discover existing analyst breadcrumbs and consolidate them:
 
 ```sql
 -- Find functions with TODO comments already present
-SELECT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) AS func_name,
-       printf('0x%X', ea) AS addr,
+SELECT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) AS func_name,
+       printf('0x%X', addr) AS addr,
        comment
 FROM pseudocode
-WHERE func_addr IN (SELECT address FROM funcs WHERE name NOT LIKE 'sub_%')
+WHERE func_addr IN (SELECT addr FROM funcs WHERE name NOT LIKE 'sub_%')
   AND comment LIKE '%TODO%' OR comment LIKE '%FIXME%' OR comment LIKE '%HACK%'
 ORDER BY func_addr;
 ```
@@ -143,7 +143,7 @@ ORDER BY call_count DESC;
 -- Resolve a writable anchor in the callee first; do not guess from the entry row.
 UPDATE pseudocode SET comment_placement = 'block1',
        comment = 'Called by init_driver to set up dispatch table'
-WHERE func_addr = 0x401050 AND ea = 0x401060;
+WHERE func_addr = 0x401050 AND addr = 0x401060;
 ```
 
 ---
@@ -169,7 +169,7 @@ UPDATE ctree_lvars SET type = 'char *'
 WHERE func_addr = 0x401000 AND idx = 0;
 
 -- 5. Inspect pseudocode anchors before writing comments
-SELECT line_num, ea, line, comment
+SELECT line_num, addr, line, comment
 FROM pseudocode
 WHERE func_addr = 0x401000
 ORDER BY line_num;
@@ -177,12 +177,12 @@ ORDER BY line_num;
 -- 6. Edit: Add inline comments explaining logic
 --    Example below uses a previously resolved writable anchor from step 5.
 UPDATE pseudocode SET comment = 'validate input before processing'
-WHERE func_addr = 0x401000 AND ea = 0x401010;
+WHERE func_addr = 0x401000 AND addr = 0x401010;
 
 -- 7. Edit: Add repeatable function comment summary
 UPDATE funcs
 SET rpt_comment = 'Processes user input buffer and validates length'
-WHERE address = 0x401000;
+WHERE addr = 0x401000;
 
 -- 8. Verify all edits
 SELECT decompile(0x401000, 1);

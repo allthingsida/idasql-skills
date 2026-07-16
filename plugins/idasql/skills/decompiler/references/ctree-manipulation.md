@@ -6,9 +6,9 @@
 
 | Node | Description | Key Fields |
 |------|-------------|------------|
-| `cot_call` | Function call | `obj_ea`, `obj_name` |
+| `cot_call` | Function call | `obj_addr`, `obj_name` |
 | `cot_var` | Local variable | `var_idx`, `var_name` |
-| `cot_obj` | Global object/function | `obj_ea`, `obj_name` |
+| `cot_obj` | Global object/function | `obj_addr`, `obj_name` |
 | `cot_num` | Numeric constant | `num_value` |
 | `cot_str` | String literal | `str_value` |
 | `cot_ptr` | Pointer dereference `*p` | `x_id` = operand |
@@ -62,7 +62,7 @@
 ### Find All Calls to a Specific Function
 
 ```sql
-SELECT item_id, ea, obj_name
+SELECT item_id, addr, obj_name
 FROM ctree
 WHERE func_addr = 0x401000
   AND op_name = 'cot_call'
@@ -72,7 +72,7 @@ WHERE func_addr = 0x401000
 ### Find All Comparisons Against Zero
 
 ```sql
-SELECT item_id, ea, parent_id
+SELECT item_id, addr, parent_id
 FROM ctree
 WHERE func_addr = 0x401000
   AND op_name IN ('cot_eq', 'cot_ne')
@@ -82,17 +82,17 @@ WHERE func_addr = 0x401000
 ### Find All Variable Accesses
 
 ```sql
-SELECT item_id, ea, var_name, var_idx
+SELECT item_id, addr, var_name, var_idx
 FROM ctree
 WHERE func_addr = 0x401000
   AND op_name = 'cot_var'
-ORDER BY ea;
+ORDER BY addr;
 ```
 
 ### Find Struct Member Accesses (Pointer)
 
 ```sql
-SELECT item_id, ea, num_value as field_offset
+SELECT item_id, addr, num_value as field_offset
 FROM ctree
 WHERE func_addr = 0x401000
   AND op_name = 'cot_memptr'
@@ -102,7 +102,7 @@ ORDER BY num_value;
 ### Find All String Literals in a Function
 
 ```sql
-SELECT item_id, ea, str_value
+SELECT item_id, addr, str_value
 FROM ctree
 WHERE func_addr = 0x401000
   AND op_name = 'cot_str';
@@ -117,7 +117,7 @@ WHERE func_addr = 0x401000
   AND (label_num >= 0 OR goto_label_num >= 0)
 ORDER BY item_id;
 
-SELECT label_num, name, item_id, printf('0x%X', item_ea) AS item_ea
+SELECT label_num, name, item_id, printf('0x%X', item_addr) AS item_addr
 FROM ctree_labels
 WHERE func_addr = 0x401000
 ORDER BY label_num;
@@ -163,13 +163,13 @@ Find functions with the most ctree depth -- indicators of complex logic, state m
 
 ```sql
 -- Top 10 functions by maximum AST depth
-SELECT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) AS name,
+SELECT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) AS name,
        printf('0x%X', func_addr) AS addr,
        MAX(depth) AS max_depth,
        COUNT(*) AS node_count
 FROM ctree
 WHERE func_addr IN (
-    SELECT address FROM funcs ORDER BY size DESC LIMIT 50
+    SELECT addr FROM funcs ORDER BY size DESC LIMIT 50
 )
 GROUP BY func_addr
 ORDER BY max_depth DESC
@@ -186,7 +186,7 @@ WITH typed_vars AS (
     SELECT func_addr, name, type
     FROM ctree_lvars
     WHERE func_addr IN (
-        SELECT address FROM funcs WHERE name NOT LIKE 'sub_%' LIMIT 100
+        SELECT addr FROM funcs WHERE name NOT LIKE 'sub_%' LIMIT 100
     )
     AND name != '' AND type != ''
 )
@@ -207,7 +207,7 @@ Useful for understanding API usage conventions and finding anomalies:
 -- How different functions call 'CreateFileW' -- what patterns emerge?
 WITH call_sites AS (
     SELECT func_addr,
-           (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) AS caller,
+           (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) AS caller,
            arg_idx,
            arg_op,
            arg_num_value,
@@ -230,8 +230,8 @@ ORDER BY arg_idx, caller;
 
 ```sql
 -- String literals visible in decompiled code (catches stack strings, computed strings)
-SELECT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) AS func,
-       printf('0x%X', ea) AS addr,
+SELECT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) AS func,
+       printf('0x%X', addr) AS addr,
        str_value
 FROM ctree
 WHERE func_addr = 0x401000

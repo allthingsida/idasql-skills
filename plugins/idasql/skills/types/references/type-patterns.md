@@ -90,14 +90,14 @@ enum NET_FLAGS {
 
 -- 2. Apply struct to a function parameter
 UPDATE funcs SET prototype = 'int __cdecl init_network(NETWORK_CONFIG *cfg);'
-WHERE address = 0x401000;
+WHERE addr = 0x401000;
 
 -- 3. Apply enum rendering in disassembly
 UPDATE instructions SET operand1_format_spec = 'enum:NET_FLAGS'
-WHERE address = 0x401020;
+WHERE addr = 0x401020;
 
 -- 4. Apply enum rendering in decompiled code
-SELECT set_numform_ea_expr(0x401000, 0x401025, 0, 'enum:NET_FLAGS', 'cot_band', 0);
+SELECT set_numform_addr_expr(0x401000, 0x401025, 0, 'enum:NET_FLAGS', 'cot_band', 0);
 
 -- 5. Verify
 SELECT decompile(0x401000, 1);
@@ -140,10 +140,10 @@ Find functions that compare the same variable against multiple constants — the
 -- Functions with many numeric comparisons (enum candidate detection)
 WITH comparisons AS (
     SELECT func_addr,
-           (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) AS func_name,
+           (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) AS func_name,
            num_value
     FROM ctree
-    WHERE func_addr IN (SELECT address FROM funcs LIMIT 200)
+    WHERE func_addr IN (SELECT addr FROM funcs LIMIT 200)
       AND op_name IN ('cot_eq', 'cot_ne')
       AND num_value IS NOT NULL
       AND num_value BETWEEN 0 AND 255
@@ -164,7 +164,7 @@ Gauge how much type recovery work remains:
 ```sql
 -- Count functions by typing status
 WITH func_typing AS (
-    SELECT f.address,
+    SELECT f.addr,
            f.name,
            CASE WHEN f.return_type IS NOT NULL AND f.return_type != '' THEN 1 ELSE 0 END AS has_return_type,
            CASE WHEN f.arg_count > 0 THEN 1 ELSE 0 END AS has_args

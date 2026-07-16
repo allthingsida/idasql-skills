@@ -42,13 +42,13 @@ Start broad, then narrow:
 
 ```sql
 -- 1) Binary orientation
-SELECT * FROM welcome;
+SELECT * FROM binary;
 
 -- 2) Capability hints from imports
 SELECT module, name FROM imports ORDER BY module, name;
 
 -- 3) Behavioral hints from strings
-SELECT content, printf('0x%X', address) AS addr
+SELECT content, printf('0x%X', addr) AS addr
 FROM strings
 WHERE length >= 8
 ORDER BY length DESC
@@ -128,7 +128,7 @@ SELECT content FROM strings WHERE length > 10 ORDER BY length DESC LIMIT 20;
 
 ```sql
 -- Dangerous string functions
-SELECT DISTINCT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) FROM disasm_calls
+SELECT DISTINCT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) FROM disasm_calls
 WHERE callee_name IN ('strcpy', 'strcat', 'sprintf', 'gets');
 
 -- Crypto-related
@@ -141,7 +141,7 @@ SELECT * FROM imports WHERE name LIKE '%socket%' OR name LIKE '%connect%' OR nam
 INSERT INTO dirtree_folders(tree, path) VALUES ('funcs', 'idasql/triage/network');
 UPDATE funcs
 SET folder_path = 'idasql/triage/network'
-WHERE address IN (
+WHERE addr IN (
   SELECT DISTINCT func_addr FROM disasm_calls
   WHERE callee_name LIKE '%socket%' OR callee_name LIKE '%connect%' OR callee_name LIKE '%send%'
 );
@@ -151,7 +151,7 @@ WHERE address IN (
 
 ```sql
 -- Basic info
-SELECT * FROM funcs WHERE address = 0x401000;
+SELECT * FROM funcs WHERE addr = 0x401000;
 
 -- Full disassembly
 SELECT disasm_func(0x401000);
@@ -166,15 +166,15 @@ SELECT name, type, size FROM ctree_lvars WHERE func_addr = 0x401000;
 SELECT callee_name FROM disasm_calls WHERE func_addr = 0x401000;
 
 -- What calls it
-SELECT (SELECT name FROM funcs WHERE from_ea >= address AND from_ea < end_ea LIMIT 1) FROM xrefs WHERE to_ea = 0x401000 AND is_code = 1;
+SELECT (SELECT name FROM funcs WHERE from_addr >= addr AND from_addr < end_addr LIMIT 1) FROM xrefs WHERE to_addr = 0x401000 AND is_code = 1;
 ```
 
 ### "Find all uses of a string"
 
 ```sql
-SELECT s.content, (SELECT name FROM funcs WHERE x.from_ea >= address AND x.from_ea < end_ea LIMIT 1) as function, printf('0x%X', x.from_ea) as location
+SELECT s.content, (SELECT name FROM funcs WHERE x.from_addr >= addr AND x.from_addr < end_addr LIMIT 1) as function, printf('0x%X', x.from_addr) as location
 FROM strings s
-JOIN xrefs x ON s.address = x.to_ea
+JOIN xrefs x ON s.addr = x.to_addr
 WHERE s.content LIKE '%config%';
 ```
 
@@ -230,28 +230,28 @@ GROUP BY calling_conv ORDER BY count DESC;
 **"Which functions return 0?"**
 ```sql
 SELECT DISTINCT f.name FROM funcs f
-JOIN ctree_v_returns r ON r.func_addr = f.address
+JOIN ctree_v_returns r ON r.func_addr = f.addr
 WHERE r.return_num = 0;
 ```
 
 **"Find functions that return -1 (error pattern)"**
 ```sql
 SELECT DISTINCT f.name FROM funcs f
-JOIN ctree_v_returns r ON r.func_addr = f.address
+JOIN ctree_v_returns r ON r.func_addr = f.addr
 WHERE r.return_num = -1;
 ```
 
 **"Functions that return their input argument"**
 ```sql
 SELECT DISTINCT f.name FROM funcs f
-JOIN ctree_v_returns r ON r.func_addr = f.address
+JOIN ctree_v_returns r ON r.func_addr = f.addr
 WHERE r.returns_arg = 1;
 ```
 
 **"Functions that return the result of another call (wrappers)"**
 ```sql
 SELECT DISTINCT f.name FROM funcs f
-JOIN ctree_v_returns r ON r.func_addr = f.address
+JOIN ctree_v_returns r ON r.func_addr = f.addr
 WHERE r.returns_call_result = 1;
 ```
 
@@ -259,8 +259,8 @@ WHERE r.returns_call_result = 1;
 ```sql
 SELECT f.name, COUNT(*) as return_count
 FROM funcs f
-JOIN ctree_v_returns r ON r.func_addr = f.address
-GROUP BY f.address
+JOIN ctree_v_returns r ON r.func_addr = f.addr
+GROUP BY f.addr
 HAVING return_count > 1
 ORDER BY return_count DESC LIMIT 20;
 ```
@@ -274,9 +274,9 @@ ORDER BY return_count DESC LIMIT 20;
 ```sql
 SELECT f.name, COUNT(*) as callers
 FROM funcs f
-JOIN xrefs x ON f.address = x.to_ea
+JOIN xrefs x ON f.addr = x.to_addr
 WHERE x.is_code = 1
-GROUP BY f.address
+GROUP BY f.addr
 ORDER BY callers DESC
 LIMIT 10;
 ```
@@ -284,26 +284,26 @@ LIMIT 10;
 ### Find Functions Calling a Specific API
 
 ```sql
-SELECT DISTINCT (SELECT name FROM funcs WHERE from_ea >= address AND from_ea < end_ea LIMIT 1) as caller
+SELECT DISTINCT (SELECT name FROM funcs WHERE from_addr >= addr AND from_addr < end_addr LIMIT 1) as caller
 FROM xrefs
-WHERE to_ea = (SELECT address FROM imports WHERE name = 'CreateFileW');
+WHERE to_addr = (SELECT addr FROM imports WHERE name = 'CreateFileW');
 ```
 
 ### String Cross-Reference Analysis
 
 ```sql
-SELECT s.content, (SELECT name FROM funcs WHERE x.from_ea >= address AND x.from_ea < end_ea LIMIT 1) as used_by
+SELECT s.content, (SELECT name FROM funcs WHERE x.from_addr >= addr AND x.from_addr < end_addr LIMIT 1) as used_by
 FROM strings s
-JOIN xrefs x ON s.address = x.to_ea
+JOIN xrefs x ON s.addr = x.to_addr
 WHERE s.content LIKE '%password%';
 ```
 
 ### Function Complexity (by Block Count)
 
 ```sql
-SELECT (SELECT name FROM funcs WHERE func_ea >= address AND func_ea < end_ea LIMIT 1) as name, COUNT(*) as block_count
+SELECT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) as name, COUNT(*) as block_count
 FROM blocks
-GROUP BY func_ea
+GROUP BY func_addr
 ORDER BY block_count DESC
 LIMIT 10;
 ```
@@ -313,9 +313,9 @@ LIMIT 10;
 ```sql
 SELECT f.name, f.size
 FROM funcs f
-LEFT JOIN disasm_calls c ON c.func_addr = f.address
-GROUP BY f.address
-HAVING COUNT(c.ea) = 0
+LEFT JOIN disasm_calls c ON c.func_addr = f.addr
+GROUP BY f.addr
+HAVING COUNT(c.addr) = 0
 ORDER BY f.size DESC;
 ```
 
@@ -324,7 +324,7 @@ ORDER BY f.size DESC;
 ```sql
 SELECT f.name, MAX(cc.depth) as max_depth
 FROM disasm_v_call_chains cc
-JOIN funcs f ON f.address = cc.root_func
+JOIN funcs f ON f.addr = cc.root_func
 GROUP BY cc.root_func
 ORDER BY max_depth DESC
 LIMIT 10;
@@ -343,8 +343,8 @@ WHERE start = 0x401000 AND direction = 'down' AND max_depth = 5;
 ```sql
 -- Trace call path to an internal helper
 SELECT step, func_name FROM shortest_path
-WHERE from_addr = (SELECT address FROM funcs WHERE name = 'main')
-  AND to_addr = (SELECT address FROM funcs WHERE name = 'copy_user_input')
+WHERE from_addr = (SELECT addr FROM funcs WHERE name = 'main')
+  AND to_addr = (SELECT addr FROM funcs WHERE name = 'copy_user_input')
   AND max_depth = 20;
 ```
 
@@ -373,7 +373,7 @@ UNION ALL
 SELECT 'import', i.name, cg.func_name
 FROM call_graph cg
 JOIN disasm_calls dc ON dc.func_addr = cg.func_addr
-JOIN imports i ON dc.callee_addr = i.address
+JOIN imports i ON dc.callee_addr = i.addr
 WHERE cg.start = 0x401000 AND cg.direction = 'down' AND cg.max_depth = 5
 ORDER BY kind, detail;
 ```

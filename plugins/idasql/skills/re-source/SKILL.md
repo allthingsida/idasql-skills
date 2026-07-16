@@ -44,7 +44,7 @@ UPDATE ctree_lvars SET type = 'PDRIVER_OBJECT'
 WHERE func_addr = 0x401000 AND idx = 0;
 
 -- Inspect pseudocode anchors before writing comments
-SELECT line_num, ea, line, comment
+SELECT line_num, addr, line, comment
 FROM pseudocode
 WHERE func_addr = 0x401000
 ORDER BY line_num;
@@ -52,7 +52,7 @@ ORDER BY line_num;
 -- Add inline comments explaining logic
 -- Example below uses a previously resolved writable anchor, not the function entry row.
 UPDATE pseudocode SET comment = 'initialize dispatch table'
-WHERE func_addr = 0x401000 AND ea = 0x401020;
+WHERE func_addr = 0x401000 AND addr = 0x401020;
 
 -- Verify changes
 SELECT decompile(0x401000, 1);
@@ -64,13 +64,13 @@ Write a concise summary describing what the function does. This makes the functi
 For exact trigger semantics (`function summary` / `func-summary` / singular `add function comment`), follow the `annotations` skill's Function Summary contract.
 
 ```sql
-SELECT address, name, comment, rpt_comment
+SELECT addr, name, comment, rpt_comment
 FROM funcs
-WHERE address = 0x401000;
+WHERE addr = 0x401000;
 
 UPDATE funcs
 SET rpt_comment = 'DriverEntry: initializes driver dispatch routines and device object'
-WHERE address = 0x401000;
+WHERE addr = 0x401000;
 ```
 
 ### 4. Recurse into Callees
@@ -107,7 +107,7 @@ WHERE start = 0x401000 AND direction = 'up' AND max_depth = 10;
 
 -- Find the shortest path from an entry point to this function
 SELECT step, func_name FROM shortest_path
-WHERE from_addr = (SELECT address FROM funcs WHERE name = 'main')
+WHERE from_addr = (SELECT addr FROM funcs WHERE name = 'main')
   AND to_addr = 0x401000 AND max_depth = 20;
 
 -- Decompile callers to see usage context
@@ -126,7 +126,7 @@ The hardest part. Decompiled code often shows casts like `*(DWORD *)(a1 + 0x10)`
 SELECT decompile(0x401000);
 
 -- Query ctree for pointer arithmetic (field accesses)
-SELECT ea, op_name, num_value
+SELECT addr, op_name, num_value
 FROM ctree WHERE func_addr = 0x401000
   AND op_name IN ('cot_add', 'cot_idx')
   AND num_value IS NOT NULL;
@@ -135,7 +135,7 @@ FROM ctree WHERE func_addr = 0x401000
 **b) Cross-function correlation — find more fields:**
 ```sql
 -- Find all callers that pass the same struct pointer
-SELECT DISTINCT (SELECT name FROM funcs WHERE dc.func_addr >= address AND dc.func_addr < end_ea LIMIT 1) as caller
+SELECT DISTINCT (SELECT name FROM funcs WHERE dc.func_addr >= addr AND dc.func_addr < end_addr LIMIT 1) as caller
 FROM disasm_calls dc
 WHERE dc.callee_addr = 0x401000;
 
@@ -162,20 +162,23 @@ INSERT INTO types (name, kind) VALUES ('MY_CONTEXT', 'struct');
 -- Get the ordinal
 SELECT ordinal FROM types WHERE name = 'MY_CONTEXT';
 
--- Add fields as you discover them
+-- Add fields as you discover them (ordinal derived from the name above)
 INSERT INTO types_members (type_ordinal, member_name, member_type)
-VALUES (42, 'handle', 'HANDLE');
+SELECT ordinal, 'handle', 'void *' FROM types WHERE name = 'MY_CONTEXT';
 INSERT INTO types_members (type_ordinal, member_name, member_type)
-VALUES (42, 'buffer_ptr', 'void *');
+SELECT ordinal, 'buffer_ptr', 'void *' FROM types WHERE name = 'MY_CONTEXT';
 INSERT INTO types_members (type_ordinal, member_name, member_type)
-VALUES (42, 'buffer_size', 'unsigned int');
+SELECT ordinal, 'buffer_size', 'unsigned int' FROM types WHERE name = 'MY_CONTEXT';
 ```
 
 **e) Apply the recovered struct:**
 ```sql
+-- Make this step self-contained (MY_CONTEXT was recovered in step d above)
+SELECT parse_decls('struct MY_CONTEXT { void *handle; void *buffer_ptr; unsigned int buffer_size; };');
+
 -- Apply to function prototype
 UPDATE funcs SET prototype = 'int __fastcall process_context(MY_CONTEXT *ctx);'
-WHERE address = 0x401000;
+WHERE addr = 0x401000;
 
 -- Or apply to a local variable
 UPDATE ctree_lvars SET type = 'MY_CONTEXT *'
@@ -247,7 +250,7 @@ WITH callers_of AS (
 ),
 offset_accesses AS (
     SELECT func_addr,
-           (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) AS func_name,
+           (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) AS func_name,
            num_value AS field_offset,
            op_name
     FROM ctree
@@ -276,13 +279,13 @@ WITH offset_funcs AS (
            COUNT(*) AS offset_accesses,
            COUNT(DISTINCT num_value) AS unique_offsets
     FROM ctree
-    WHERE func_addr IN (SELECT address FROM funcs ORDER BY size DESC LIMIT 100)
+    WHERE func_addr IN (SELECT addr FROM funcs ORDER BY size DESC LIMIT 100)
       AND op_name = 'cot_add'
       AND num_value IS NOT NULL
       AND num_value BETWEEN 1 AND 0x1000
     GROUP BY func_addr
 )
-SELECT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) AS name,
+SELECT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) AS name,
        printf('0x%X', func_addr) AS addr,
        offset_accesses,
        unique_offsets

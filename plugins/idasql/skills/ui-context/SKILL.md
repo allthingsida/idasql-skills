@@ -71,11 +71,12 @@ Use this skill for prompts like:
 
 - `get_ui_context_json()` is registered in every runtime, but only the IDA GUI
   plugin returns live UI state.
-- Under idalib/CLI it returns a stub envelope marked `available:false` /
-  `capture.source:"cli"` (no error, just no UI).
+- The live GUI envelope carries `available:true`; the idalib/CLI stub carries
+  `available:false` / `capture.source:"cli"` (no error, just no UI). So `available`
+  is the reliable GUI-vs-CLI discriminator in both directions — key on it.
 - When you get the CLI stub, state this clearly and continue with non-UI queries (explicit addresses/symbols, or DB-orientation queries).
 
-`welcome` is database metadata only; it is not a UI context replacement.
+`binary` is database metadata only; it is not a UI context replacement.
 
 ---
 
@@ -146,12 +147,12 @@ If `has_address: false`, report chooser selection details and state there is no 
 If `get_ui_context_json()` cannot run:
 
 - state that UI context is unavailable in this runtime
-- ask for explicit symbol/address or continue with non-UI alternatives (for example `SELECT * FROM welcome` for DB orientation)
+- ask for explicit symbol/address or continue with non-UI alternatives (for example `SELECT * FROM binary` for DB orientation)
 
 ---
 
 ## Guardrails
 
-- Do not treat `welcome` output as UI context.
+- Do not treat `binary` output as UI context.
 - Do not fabricate selection/address fields when absent.
 - Do not recapture repeatedly in one answer unless user asks for refresh.

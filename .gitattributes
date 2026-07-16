@@ -1,0 +1,6 @@
+# Excluded from `git archive` (and thus from /publish to the public repo):
+# AGENTS.md is private agent guidance, kept in source only; export-ignored from releases.
+# Defensive: this package currently ships no AGENTS.md, but if one is added it
+# must never reach the public package.
+AGENTS.md export-ignore
+**/AGENTS.md export-ignore

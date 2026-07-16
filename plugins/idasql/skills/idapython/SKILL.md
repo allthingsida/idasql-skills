@@ -25,6 +25,21 @@ Python execution is disabled by default. Enable it with:
 PRAGMA idasql.enable_idapython = 1;
 ```
 
+Captured `print` output is **unbounded by default**. To bound a runaway or very
+chatty snippet (so it can't exhaust memory / the response), set an optional byte cap;
+`0` restores unbounded:
+
+```sql
+PRAGMA idasql.idapython_output_max = 65536;  -- cap captured output at 64 KiB
+PRAGMA idasql.idapython_output_max = 0;      -- unbounded (default)
+```
+
+Output past the cap is dropped with a `...[idapython output truncated at N bytes]...` marker.
+
+To confirm the current values of `enable_idapython` and `idapython_output_max` (and
+the other runtime controls), `SELECT * FROM runtime_settings WHERE scope = 'idasql'` —
+a read-only discovery view over the `PRAGMA idasql.*` surface. See the `connect` skill.
+
 ### Examples
 
 ```sql
@@ -102,8 +117,8 @@ PRAGMA idasql.enable_idapython = 1;
 SELECT idapython_snippet('
 import idautils, idc
 count = 0
-for func_ea in idautils.Functions():
-    if idc.get_func_attr(func_ea, idc.FUNCATTR_FLAGS) & 0x4:  # FUNC_LIB
+for func_addr in idautils.Functions():
+    if idc.get_func_attr(func_addr, idc.FUNCATTR_FLAGS) & 0x4:  # FUNC_LIB
         count += 1
 print(f"Library functions: {count}")
 ');
@@ -131,10 +146,10 @@ When you need Python's power for extraction but SQL's power for analysis:
 SELECT idapython_snippet('
 import json, idautils, idc
 result = []
-for ea in idautils.Functions():
-    flags = idc.get_func_attr(ea, idc.FUNCATTR_FLAGS)
+for addr in idautils.Functions():
+    flags = idc.get_func_attr(addr, idc.FUNCATTR_FLAGS)
     if flags & 0x4:  # FUNC_LIB
-        result.append({"ea": ea, "name": idc.get_func_name(ea)})
+        result.append({"addr": addr, "name": idc.get_func_name(addr)})
 print(json.dumps(result))
 ');
 

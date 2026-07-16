@@ -19,7 +19,7 @@ Use this checklist before merging major skill rewrites.
 
 ## 4) Mutation Safety
 - [ ] Mandatory mutation loop is present or referenced.
-- [ ] Write examples use precise keys (`func_addr`, `ea`, `idx`, `slot`, etc.).
+- [ ] Write examples use precise keys (`func_addr`, `addr`, `idx`, `slot`, etc.).
 - [ ] Verify/refresh steps exist after mutation examples.
 
 ## 5) Performance and Failure Handling
@@ -29,6 +29,6 @@ Use this checklist before merging major skill rewrites.
 - [ ] HTTP/REPL/CLI startup patterns remain deterministic.
 
 ## 7) Consistency
-- [ ] Terminology is consistent across skills (`ea`, `func_addr`, `start_ea`, etc.).
+- [ ] Terminology is consistent across skills (`addr`, `func_addr`, `start_addr`, etc.).
 - [ ] Table/view names match live SQL metadata.
 - [ ] Cross-links between related skills are accurate.

@@ -33,7 +33,7 @@ Route to:
 
 ```sql
 -- 1) Start with a structured search while you learn the result shape
-SELECT name, kind, address
+SELECT name, kind, addr
 FROM grep
 WHERE pattern = 'main'
 ORDER BY kind, name
@@ -50,7 +50,7 @@ ORDER BY name;
 
 ```sql
 -- 3) Page with ordinary SQL
-SELECT name, kind, address
+SELECT name, kind, addr
 FROM grep
 WHERE pattern = 'sub_%'
 ORDER BY kind, name
@@ -68,7 +68,7 @@ Interpretation guidance:
 `grep` exposes named IDA entities as rows:
 - `name`
 - `kind`
-- `address`
+- `addr`
 - `ordinal`
 - `parent_name`
 - `full_name`
@@ -108,7 +108,7 @@ LIMIT 20;
 
 ```sql
 -- Prefix wildcard
-SELECT name, kind, address
+SELECT name, kind, addr
 FROM grep
 WHERE pattern = 'sub_%'
 ORDER BY name
@@ -130,7 +130,7 @@ LIMIT 20;
 ### Find candidate functions by name
 
 ```sql
-SELECT name, address
+SELECT name, addr
 FROM grep
 WHERE pattern = 'main%' AND kind = 'function'
 ORDER BY name;
@@ -139,7 +139,7 @@ ORDER BY name;
 ### Resolve imported APIs
 
 ```sql
-SELECT module, name, address
+SELECT module, name, addr
 FROM imports
 WHERE name LIKE 'CreateFile%'
 ORDER BY module, name;
@@ -169,7 +169,7 @@ LIMIT 30;
 ```sql
 SELECT g.name, f.size, f.prototype
 FROM grep g
-JOIN funcs f ON f.address = g.address
+JOIN funcs f ON f.addr = g.addr
 WHERE g.pattern = 'sub_%' AND g.kind = 'function'
 ORDER BY f.size DESC
 LIMIT 20;
@@ -181,7 +181,7 @@ LIMIT 20;
 SELECT caller_name, printf('0x%X', caller_addr) AS from_addr
 FROM callers
 WHERE func_addr = (
-    SELECT address
+    SELECT addr
     FROM imports
     WHERE name = 'CreateFileW'
     ORDER BY name

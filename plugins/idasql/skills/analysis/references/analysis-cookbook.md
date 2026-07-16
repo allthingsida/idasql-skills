@@ -27,7 +27,7 @@ WHERE arg_index >= 0 AND is_struct = 1;
 ```sql
 SELECT f.name, f.return_type, f.arg_count, r.return_num
 FROM funcs f
-JOIN ctree_v_returns r ON r.func_addr = f.address
+JOIN ctree_v_returns r ON r.func_addr = f.addr
 WHERE f.return_is_integral = 1
   AND f.arg_count >= 3
   AND r.return_num IS NOT NULL
@@ -47,9 +47,9 @@ WHERE calling_conv = 'fastcall' AND return_is_ptr = 1;
 ### Security: Dangerous Function Calls with Stack Buffers
 
 ```sql
-SELECT f.name, c.callee_name, printf('0x%X', c.ea) as address
+SELECT f.name, c.callee_name, printf('0x%X', c.addr) as addr
 FROM funcs f
-JOIN ctree_v_calls c ON c.func_addr = f.address
+JOIN ctree_v_calls c ON c.func_addr = f.addr
 JOIN ctree_call_args a ON a.func_addr = c.func_addr AND a.call_item_id = c.item_id
 WHERE c.callee_name IN ('strcpy', 'strcat', 'sprintf', 'gets', 'memcpy')
   AND a.arg_idx = 0 AND a.arg_var_is_stk = 1
@@ -59,7 +59,7 @@ ORDER BY f.name;
 ### Find Zero Comparisons (Potential Error Checks)
 
 ```sql
-SELECT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) as func, printf('0x%X', ea) as addr
+SELECT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) as func, printf('0x%X', addr) as addr
 FROM ctree_v_comparisons
 WHERE op_name = 'cot_eq' AND rhs_op = 'cot_num' AND rhs_num = 0;
 ```
@@ -69,14 +69,14 @@ WHERE op_name = 'cot_eq' AND rhs_op = 'cot_num' AND rhs_num = 0;
 ```sql
 SELECT f.name, l.callee_name, l.loop_op
 FROM ctree_v_calls_in_loops l
-JOIN funcs f ON f.address = l.func_addr
+JOIN funcs f ON f.addr = l.func_addr
 ORDER BY f.name;
 ```
 
 ### malloc with Constant Size
 
 ```sql
-SELECT (SELECT name FROM funcs WHERE c.func_addr >= address AND c.func_addr < end_ea LIMIT 1) as func, a.arg_num_value as size
+SELECT (SELECT name FROM funcs WHERE c.func_addr >= addr AND c.func_addr < end_addr LIMIT 1) as func, a.arg_num_value as size
 FROM ctree_v_calls c
 JOIN ctree_call_args a ON a.func_addr = c.func_addr AND a.call_item_id = c.item_id
 WHERE c.callee_name LIKE '%malloc%'
@@ -109,9 +109,9 @@ ORDER BY count DESC;
 ```sql
 SELECT f.name as func_name, i.module, COUNT(*) as api_count
 FROM funcs f
-JOIN disasm_calls dc ON dc.func_addr = f.address
-JOIN imports i ON dc.callee_addr = i.address
-GROUP BY f.address, i.module
+JOIN disasm_calls dc ON dc.func_addr = f.addr
+JOIN imports i ON dc.callee_addr = i.addr
+GROUP BY f.addr, i.module
 ORDER BY f.name, api_count DESC;
 ```
 
@@ -120,9 +120,9 @@ ORDER BY f.name, api_count DESC;
 ```sql
 SELECT f.name, COUNT(*) as indirect_calls
 FROM funcs f
-JOIN disasm_calls dc ON dc.func_addr = f.address
+JOIN disasm_calls dc ON dc.func_addr = f.addr
 WHERE dc.callee_addr = 0
-GROUP BY f.address
+GROUP BY f.addr
 ORDER BY indirect_calls DESC
 LIMIT 20;
 ```
@@ -130,9 +130,9 @@ LIMIT 20;
 ### String Format Audit (printf-style Vulnerabilities)
 
 ```sql
-SELECT f.name, c.callee_name, printf('0x%X', c.ea) as addr
+SELECT f.name, c.callee_name, printf('0x%X', c.addr) as addr
 FROM funcs f
-JOIN ctree_v_calls c ON c.func_addr = f.address
+JOIN ctree_v_calls c ON c.func_addr = f.addr
 JOIN ctree_call_args a ON a.func_addr = c.func_addr AND a.call_item_id = c.item_id
 WHERE c.callee_name LIKE '%printf%'
   AND a.arg_idx = 0
@@ -158,8 +158,8 @@ SELECT f.name,
        COALESCE(a.alloc_count, 0) as allocations,
        COALESCE(r.free_count, 0) as frees
 FROM funcs f
-LEFT JOIN allocators a ON f.address = a.func_addr
-LEFT JOIN freers r ON f.address = r.func_addr
+LEFT JOIN allocators a ON f.addr = a.func_addr
+LEFT JOIN freers r ON f.addr = r.func_addr
 WHERE a.alloc_count > 0 AND COALESCE(r.free_count, 0) = 0
 ORDER BY allocations DESC;
 ```
@@ -170,14 +170,14 @@ ORDER BY allocations DESC;
 SELECT
     f.name,
     f.size,
-    COUNT(DISTINCT b.start_ea) as blocks,
-    f.size / COUNT(DISTINCT b.start_ea) as avg_block_size
+    COUNT(DISTINCT b.start_addr) as blocks,
+    f.size / COUNT(DISTINCT b.start_addr) as avg_block_size
 FROM funcs f
-JOIN blocks b ON b.func_ea = f.address
+JOIN blocks b ON b.func_addr = f.addr
 WHERE f.size > 100
-GROUP BY f.address
-HAVING COUNT(DISTINCT b.start_ea) > 10
-   AND f.size / COUNT(DISTINCT b.start_ea) < 10
+GROUP BY f.addr
+HAVING COUNT(DISTINCT b.start_addr) > 10
+   AND f.size / COUNT(DISTINCT b.start_addr) < 10
 ORDER BY blocks DESC;
 ```
 
@@ -186,9 +186,9 @@ ORDER BY blocks DESC;
 ```sql
 SELECT f.name, COUNT(*) as return_count
 FROM funcs f
-JOIN ctree ct ON ct.func_addr = f.address
+JOIN ctree ct ON ct.func_addr = f.addr
 WHERE ct.op_name = 'cit_return'
-GROUP BY f.address
+GROUP BY f.addr
 HAVING COUNT(*) > 3
 ORDER BY return_count DESC;
 ```
@@ -227,7 +227,7 @@ SELECT
     l.callee_name as api_called,
     l.loop_op as loop_type
 FROM ctree_v_calls_in_loops l
-JOIN funcs f ON f.address = l.func_addr
+JOIN funcs f ON f.addr = l.func_addr
 JOIN imports i ON l.callee_name = i.name
 ORDER BY f.name;
 ```
@@ -251,10 +251,10 @@ SELECT
     s.name as segment,
     COUNT(*) as data_refs
 FROM funcs f
-JOIN xrefs x ON x.from_ea BETWEEN f.address AND f.end_ea
-JOIN segments s ON x.to_ea BETWEEN s.start_ea AND s.end_ea
+JOIN xrefs x ON x.from_addr BETWEEN f.addr AND f.end_addr
+JOIN segments s ON x.to_addr BETWEEN s.start_addr AND s.end_addr
 WHERE s.class = 'DATA' AND x.is_code = 0
-GROUP BY f.address, s.name
+GROUP BY f.addr, s.name
 ORDER BY data_refs DESC
 LIMIT 20;
 ```
@@ -267,8 +267,8 @@ SELECT
     COUNT(*) as chunk_count,
     SUM(fc.size) as total_size
 FROM funcs f
-JOIN fchunks fc ON fc.owner = f.address
-GROUP BY f.address
+JOIN fchunks fc ON fc.owner = f.addr
+GROUP BY f.addr
 HAVING COUNT(*) > 1
 ORDER BY chunk_count DESC;
 ```
@@ -297,8 +297,8 @@ null_checkers AS (
 )
 SELECT f.name
 FROM funcs f
-JOIN malloc_callers m ON f.address = m.func_addr
-JOIN null_checkers n ON f.address = n.func_addr;
+JOIN malloc_callers m ON f.addr = m.func_addr
+JOIN null_checkers n ON f.addr = n.func_addr;
 ```
 
 #### CTE with Aggregation
@@ -311,17 +311,17 @@ WITH call_counts AS (
     GROUP BY func_addr
 ),
 block_counts AS (
-    SELECT func_ea as func_addr, COUNT(*) as block_cnt
+    SELECT func_addr as func_addr, COUNT(*) as block_cnt
     FROM blocks
-    GROUP BY func_ea
+    GROUP BY func_addr
 )
 SELECT f.name,
        COALESCE(c.call_cnt, 0) as calls,
        COALESCE(b.block_cnt, 0) as blocks,
        COALESCE(c.call_cnt, 0) * COALESCE(b.block_cnt, 0) as complexity
 FROM funcs f
-LEFT JOIN call_counts c ON f.address = c.func_addr
-LEFT JOIN block_counts b ON f.address = b.func_addr
+LEFT JOIN call_counts c ON f.addr = c.func_addr
+LEFT JOIN block_counts b ON f.addr = b.func_addr
 ORDER BY complexity DESC
 LIMIT 10;
 ```
@@ -331,15 +331,15 @@ LIMIT 10;
 ```sql
 -- Find all functions reachable from main (up to depth 5)
 WITH RECURSIVE call_graph AS (
-    SELECT address as func_addr, name, 0 as depth
+    SELECT addr as func_addr, name, 0 as depth
     FROM funcs WHERE name = 'main'
 
     UNION ALL
 
-    SELECT f.address, f.name, cg.depth + 1
+    SELECT f.addr, f.name, cg.depth + 1
     FROM call_graph cg
     JOIN disasm_calls dc ON dc.func_addr = cg.func_addr
-    JOIN funcs f ON f.address = dc.callee_addr
+    JOIN funcs f ON f.addr = dc.callee_addr
     WHERE cg.depth < 5
       AND dc.callee_addr != 0
 )
@@ -363,7 +363,7 @@ WITH RECURSIVE callers AS (
     JOIN disasm_calls dc ON dc.callee_addr = c.func_addr
     WHERE c.depth < 5
 )
-SELECT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) as caller, MIN(depth) as distance
+SELECT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) as caller, MIN(depth) as distance
 FROM callers
 GROUP BY func_addr
 ORDER BY distance, caller;
@@ -377,11 +377,11 @@ SELECT
     s.name as seg,
     f.name,
     f.size,
-    ROW_NUMBER() OVER (PARTITION BY s.start_ea ORDER BY f.size DESC) as rank
+    ROW_NUMBER() OVER (PARTITION BY s.start_addr ORDER BY f.size DESC) as rank
 FROM funcs f
 JOIN segments s
-  ON f.address >= s.start_ea
- AND f.address < s.end_ea
+  ON f.addr >= s.start_addr
+ AND f.addr < s.end_addr
 WHERE f.size > 0;
 ```
 
@@ -390,9 +390,9 @@ WHERE f.size > 0;
 SELECT
     name,
     size,
-    SUM(size) OVER (ORDER BY address) as cumulative_size
+    SUM(size) OVER (ORDER BY addr) as cumulative_size
 FROM funcs
-ORDER BY address;
+ORDER BY addr;
 ```
 
 ```sql
@@ -415,14 +415,14 @@ SELECT
     f.name,
     f.size,
     s.name as segment,
-    (SELECT COUNT(*) FROM blocks WHERE func_ea = f.address) as block_count,
-    (SELECT COUNT(*) FROM disasm_calls WHERE func_addr = f.address) as outgoing_calls,
-    (SELECT COUNT(*) FROM xrefs WHERE to_ea = f.address AND is_code = 1) as incoming_calls,
-    (SELECT COUNT(*) FROM ctree_lvars WHERE func_addr = f.address) as local_vars
+    (SELECT COUNT(*) FROM blocks WHERE func_addr = f.addr) as block_count,
+    (SELECT COUNT(*) FROM disasm_calls WHERE func_addr = f.addr) as outgoing_calls,
+    (SELECT COUNT(*) FROM xrefs WHERE to_addr = f.addr AND is_code = 1) as incoming_calls,
+    (SELECT COUNT(*) FROM ctree_lvars WHERE func_addr = f.addr) as local_vars
 FROM funcs f
 JOIN segments s
-  ON f.address >= s.start_ea
- AND f.address < s.end_ea
+  ON f.addr >= s.start_addr
+ AND f.addr < s.end_addr
 ORDER BY f.size DESC
 LIMIT 20;
 ```
@@ -435,7 +435,7 @@ SELECT
     f2.name as func2,
     f1.size
 FROM funcs f1
-JOIN funcs f2 ON f1.size = f2.size AND f1.address < f2.address
+JOIN funcs f2 ON f1.size = f2.size AND f1.addr < f2.addr
 WHERE f1.size > 50
 ORDER BY f1.size DESC;
 ```
@@ -448,15 +448,15 @@ SELECT f.name, call_count
 FROM (
     SELECT func_addr, COUNT(*) as call_count
     FROM disasm_calls dc
-    JOIN imports i ON dc.callee_addr = i.address
+    JOIN imports i ON dc.callee_addr = i.addr
     GROUP BY func_addr
 ) sub
-JOIN funcs f ON f.address = sub.func_addr
+JOIN funcs f ON f.addr = sub.func_addr
 WHERE call_count > (
     SELECT AVG(cnt) FROM (
         SELECT COUNT(*) as cnt
         FROM disasm_calls dc
-        JOIN imports i ON dc.callee_addr = i.address
+        JOIN imports i ON dc.callee_addr = i.addr
         GROUP BY func_addr
     )
 )
@@ -500,25 +500,25 @@ WHERE length > 5;
 
 ```sql
 -- Comprehensive security audit in one query
-SELECT 'dangerous_func' as check_type, (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) as location, callee_name as detail
+SELECT 'dangerous_func' as check_type, (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) as location, callee_name as detail
 FROM disasm_calls
 WHERE callee_name IN ('strcpy', 'strcat', 'sprintf', 'gets', 'scanf')
 
 UNION ALL
 
-SELECT 'crypto_usage', (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1), callee_name
+SELECT 'crypto_usage', (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1), callee_name
 FROM disasm_calls
 WHERE callee_name LIKE '%Crypt%' OR callee_name LIKE '%AES%' OR callee_name LIKE '%RSA%'
 
 UNION ALL
 
-SELECT 'network_call', (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1), callee_name
+SELECT 'network_call', (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1), callee_name
 FROM disasm_calls
 WHERE callee_name IN ('socket', 'connect', 'send', 'recv', 'WSAStartup')
 
 UNION ALL
 
-SELECT 'registry_access', (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1), callee_name
+SELECT 'registry_access', (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1), callee_name
 FROM disasm_calls
 WHERE callee_name LIKE 'Reg%'
 
@@ -546,8 +546,8 @@ SELECT f.name
 FROM funcs f
 WHERE EXISTS (
     SELECT 1 FROM xrefs x
-    JOIN strings s ON x.to_ea = s.address
-    WHERE x.from_ea BETWEEN f.address AND f.end_ea
+    JOIN strings s ON x.to_addr = s.addr
+    WHERE x.from_addr BETWEEN f.addr AND f.end_addr
 );
 ```
 
@@ -557,7 +557,7 @@ SELECT f.name, f.size
 FROM funcs f
 WHERE NOT EXISTS (
     SELECT 1 FROM disasm_calls dc
-    WHERE dc.func_addr = f.address
+    WHERE dc.func_addr = f.addr
 )
 ORDER BY f.size DESC;
 ```
@@ -572,10 +572,10 @@ Combine CFG edges with block counts and call metrics for a complexity overview:
 
 ```sql
 SELECT f.name, f.size,
-       (SELECT COUNT(*) FROM blocks b WHERE b.func_ea = f.address) as blocks,
-       (SELECT COUNT(*) FROM cfg_edges ce WHERE ce.func_ea = f.address) as edges,
-       (SELECT COUNT(*) FROM disasm_calls dc WHERE dc.func_addr = f.address) as calls_made,
-       (SELECT COUNT(*) FROM disasm_loops dl WHERE dl.func_addr = f.address) as loops
+       (SELECT COUNT(*) FROM blocks b WHERE b.func_addr = f.addr) as blocks,
+       (SELECT COUNT(*) FROM cfg_edges ce WHERE ce.func_addr = f.addr) as edges,
+       (SELECT COUNT(*) FROM disasm_calls dc WHERE dc.func_addr = f.addr) as calls_made,
+       (SELECT COUNT(*) FROM disasm_loops dl WHERE dl.func_addr = f.addr) as loops
 FROM funcs f
 WHERE f.size > 32
 ORDER BY edges DESC
@@ -590,7 +590,7 @@ Find functions that heavily reference data segments — potential targets for bu
 SELECT dr.from_func_name, COUNT(*) as global_refs,
        GROUP_CONCAT(DISTINCT printf('0x%X', dr.to_addr)) as targets
 FROM data_refs dr
-JOIN segments s ON dr.to_addr BETWEEN s.start_ea AND s.end_ea
+JOIN segments s ON dr.to_addr BETWEEN s.start_addr AND s.end_addr
 WHERE s.class = 'DATA'
 GROUP BY dr.from_func_addr
 ORDER BY global_refs DESC
@@ -612,7 +612,7 @@ WITH per_func AS (
     FROM function_chunks
     GROUP BY func_addr
 )
-SELECT pf.func_addr, (SELECT name FROM names WHERE address = pf.func_addr LIMIT 1) as func_name,
+SELECT pf.func_addr, (SELECT name FROM names WHERE addr = pf.func_addr LIMIT 1) as func_name,
        pf.chunk_count, pf.block_count, pf.total_size,
        pf.span_end - pf.span_start as address_span,
        CAST(pf.total_size AS REAL) / NULLIF(pf.span_end - pf.span_start, 0) as density

@@ -4,7 +4,7 @@
 
 CTE notes for predictable performance:
 - Seed CTEs with constrained function sets (for example: `funcs ORDER BY size DESC LIMIT N`).
-- Keep `func_addr`/`func_ea` constraints inside inner CTEs when touching `instructions`/`blocks`.
+- Keep `func_addr`/`func_addr` constraints inside inner CTEs when touching `instructions`/`blocks`.
 - For mutation workflows, run candidate CTEs first, then execute bounded `DELETE`/`make_code*` using those results.
 - Avoid recursive/unbounded CTEs over unconstrained `instructions` on large IDBs.
 
@@ -16,11 +16,11 @@ Fingerprint functions by their instruction mix -- useful for finding similar fun
 -- Top 10 most "complex" functions by unique mnemonic count
 WITH mnemonic_profile AS (
     SELECT func_addr,
-           (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) AS func_name,
+           (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) AS func_name,
            COUNT(DISTINCT mnemonic) AS unique_mnemonics,
            COUNT(*) AS total_insns
     FROM instructions
-    WHERE func_addr IN (SELECT address FROM funcs ORDER BY size DESC LIMIT 50)
+    WHERE func_addr IN (SELECT addr FROM funcs ORDER BY size DESC LIMIT 50)
     GROUP BY func_addr
 )
 SELECT func_name,
@@ -41,7 +41,7 @@ Hub functions that call many different APIs are often dispatchers, init routines
 -- Functions calling the most distinct callees
 WITH callee_counts AS (
     SELECT func_addr,
-           (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) AS func_name,
+           (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) AS func_name,
            COUNT(DISTINCT callee_name) AS unique_callees
     FROM disasm_calls
     WHERE callee_name IS NOT NULL AND callee_name != ''
@@ -62,20 +62,20 @@ A composite complexity metric combining structural and call complexity:
 ```sql
 -- Composite complexity score
 WITH block_counts AS (
-    SELECT func_ea AS addr, COUNT(*) AS n_blocks
-    FROM blocks GROUP BY func_ea
+    SELECT func_addr AS addr, COUNT(*) AS n_blocks
+    FROM blocks GROUP BY func_addr
 ),
 insn_counts AS (
     SELECT func_addr AS addr, COUNT(*) AS n_insns
     FROM instructions
-    WHERE func_addr IN (SELECT address FROM funcs ORDER BY size DESC LIMIT 100)
+    WHERE func_addr IN (SELECT addr FROM funcs ORDER BY size DESC LIMIT 100)
     GROUP BY func_addr
 ),
 call_counts AS (
     SELECT func_addr AS addr, COUNT(*) AS n_calls
     FROM disasm_calls GROUP BY func_addr
 )
-SELECT (SELECT name FROM funcs WHERE i.addr >= address AND i.addr < end_ea LIMIT 1) AS name,
+SELECT (SELECT name FROM funcs WHERE i.addr >= addr AND i.addr < end_addr LIMIT 1) AS name,
        printf('0x%X', i.addr) AS addr,
        COALESCE(b.n_blocks, 0) AS blocks,
        i.n_insns AS insns,
@@ -98,11 +98,11 @@ WITH ranked AS (
     SELECT s.name AS seg,
            f.name,
            f.size,
-           ROW_NUMBER() OVER (PARTITION BY s.start_ea ORDER BY f.size DESC) AS rank
+           ROW_NUMBER() OVER (PARTITION BY s.start_addr ORDER BY f.size DESC) AS rank
     FROM funcs f
     JOIN segments s
-      ON f.address >= s.start_ea
-     AND f.address < s.end_ea
+      ON f.addr >= s.start_addr
+     AND f.addr < s.end_addr
 )
 SELECT seg, name, size
 FROM ranked
@@ -116,20 +116,20 @@ Use these prompt-to-SQL templates in agent sessions:
 
 ```sql
 -- 1) Safe instruction lifecycle at one EA
-SELECT address, disasm FROM instructions WHERE address = 0x401000;
-DELETE FROM instructions WHERE address = 0x401000;
+SELECT addr, disasm FROM instructions WHERE addr = 0x401000;
+DELETE FROM instructions WHERE addr = 0x401000;
 SELECT make_code(0x401000);
-SELECT address, disasm FROM instructions WHERE address = 0x401000;
+SELECT addr, disasm FROM instructions WHERE addr = 0x401000;
 
 -- 2) Range lifecycle with verification
-SELECT COUNT(*) FROM instructions WHERE address >= 0x401000 AND address < 0x401100;
-DELETE FROM instructions WHERE address >= 0x401000 AND address < 0x401100;
+SELECT COUNT(*) FROM instructions WHERE addr >= 0x401000 AND addr < 0x401100;
+DELETE FROM instructions WHERE addr >= 0x401000 AND addr < 0x401100;
 SELECT make_code_range(0x401000, 0x401100);
-SELECT COUNT(*) FROM instructions WHERE address >= 0x401000 AND address < 0x401100;
+SELECT COUNT(*) FROM instructions WHERE addr >= 0x401000 AND addr < 0x401100;
 
 -- 3) Function-scoped lifecycle
 SELECT COUNT(*) FROM instructions WHERE func_addr = 0x401000;
 DELETE FROM instructions WHERE func_addr = 0x401000;
-SELECT make_code_range(address, end_ea) FROM funcs WHERE address = 0x401000;
+SELECT make_code_range(addr, end_addr) FROM funcs WHERE addr = 0x401000;
 SELECT COUNT(*) FROM instructions WHERE func_addr = 0x401000;
 ```

@@ -34,21 +34,21 @@ Route to:
 
 ```sql
 -- 1) Confirm target row/function before editing
-SELECT * FROM funcs WHERE address = 0x401000;
+SELECT * FROM funcs WHERE addr = 0x401000;
 
 -- 2) Inspect current comment state
-SELECT ea, line, comment
+SELECT addr, line, comment
 FROM pseudocode
 WHERE func_addr = 0x401000
 LIMIT 30;
 
 -- 3) Inspect existing disassembly comments
-SELECT * FROM comments WHERE address BETWEEN 0x401000 AND 0x401100;
+SELECT * FROM comments WHERE addr BETWEEN 0x401000 AND 0x401100;
 ```
 
 Interpretation guidance:
 - Never edit blind: validate exact row identity before mutation.
-- Prefer deterministic keys (`func_addr + ea`, `idx`, `slot`) over fuzzy name matches.
+- Prefer deterministic keys (`func_addr + addr`, `idx`, `slot`) over fuzzy name matches.
 
 ---
 
@@ -113,13 +113,13 @@ VALUES ('funcs', 'idasql/review/needs-types');
 
 UPDATE funcs
 SET folder_path = 'idasql/review/needs-types'
-WHERE address = 0x401000;
+WHERE addr = 0x401000;
 
 -- Mark a function as annotated while adding the required repeatable summary
 UPDATE funcs
 SET folder_path = 'idasql/review/annotated',
     rpt_comment = 'Parses command records, validates the opcode, and dispatches to command handlers.'
-WHERE address = 0x401000;
+WHERE addr = 0x401000;
 
 UPDATE names
 SET folder_path = 'idasql/names/globals'
@@ -157,13 +157,13 @@ Default function-summary behavior:
 Canonical SQL pattern:
 
 ```sql
-SELECT address, name, comment, rpt_comment
+SELECT addr, name, comment, rpt_comment
 FROM funcs
-WHERE address = 0x401000;
+WHERE addr = 0x401000;
 
 UPDATE funcs
 SET rpt_comment = 'One-paragraph summary of what the function does, inputs/outputs, and key behavior.'
-WHERE address = 0x401000;
+WHERE addr = 0x401000;
 ```
 
 ---
@@ -177,17 +177,17 @@ Important separation:
 - `pseudocode` writes never call `set_func_cmt()`.
 - Use `funcs.comment` / `funcs.rpt_comment` for true function comments.
 
-Writable columns: `comment`, `comment_placement`. Placements: `semi` (after `;`), `block1` (own line above), `block2`, `curly1`, `curly2`, `colon`, `case`, `else`, `do`.
+Writable columns: `comment`, `comment_placement`. Placements: `semi` (after `;`), `block1` (own line above), `block2`, `curly1`, `curly2`, `brace1`, `brace2`, `colon`, `case`, `else`, `do`, `asm`, `try`. An unrecognized placement string is silently coerced to `semi`.
 
 Anchor guidance:
 - Prefer a concrete pseudocode statement row, not a guessed function-entry row.
-- If an `ea` maps to multiple pseudocode rows (`{`, statement, `}`), resolve a unique non-brace anchor first.
-- Use `line_num` only to inspect candidate rows. Comment writes persist by `ea + comment_placement`; shared-`ea` rows need extra care, so do not assume every displayed shared-`ea` row is independently writable.
+- If an `addr` maps to multiple pseudocode rows (`{`, statement, `}`), resolve a unique non-brace anchor first.
+- Use `line_num` only to inspect candidate rows. Comment writes persist by `addr + comment_placement`; shared-`addr` rows need extra care, so do not assume every displayed shared-`addr` row is independently writable.
 
 Inspect anchors before writing:
 
 ```sql
-SELECT line_num, ea, line, comment
+SELECT line_num, addr, line, comment
 FROM pseudocode
 WHERE func_addr = 0x401000
 ORDER BY line_num;
@@ -199,19 +199,19 @@ ORDER BY line_num;
 -- Edit: Add inline comment to decompiled code
 UPDATE pseudocode SET comment_placement = 'semi',
                       comment = 'buffer overflow here'
-WHERE func_addr = 0x401000 AND ea = 0x401020;
+WHERE func_addr = 0x401000 AND addr = 0x401020;
 
 -- Edit: Add block comment (own line above statement)
 UPDATE pseudocode SET comment_placement = 'block1', comment = 'vulnerable call'
-WHERE func_addr = 0x401000 AND ea = 0x401020;
+WHERE func_addr = 0x401000 AND addr = 0x401020;
 
 -- Edit: Delete comments at a resolved unique anchor
--- Warning: comment = NULL currently clears all placements at that ea.
+-- Warning: comment = NULL currently clears all placements at that addr.
 UPDATE pseudocode SET comment = NULL
-WHERE func_addr = 0x401000 AND ea = 0x401020;
+WHERE func_addr = 0x401000 AND addr = 0x401020;
 
 -- Read edited pseudocode with comments
-SELECT ea, line, comment FROM pseudocode WHERE func_addr = 0x401000;
+SELECT addr, line, comment FROM pseudocode WHERE func_addr = 0x401000;
 ```
 
 ### Cleaning Up Orphan Decompiler Comments
@@ -225,10 +225,10 @@ FROM pseudocode_v_orphan_comment_groups
 ORDER BY orphan_count DESC
 LIMIT 20;
 
-SELECT ea, comment_placement, orphan_comment
+SELECT addr, comment_placement, orphan_comment
 FROM pseudocode_orphan_comments
 WHERE func_addr = 0x401000
-ORDER BY ea, comment_placement;
+ORDER BY addr, comment_placement;
 ```
 
 Delete-only mutation pattern:
@@ -236,7 +236,7 @@ Delete-only mutation pattern:
 UPDATE pseudocode_orphan_comments
 SET orphan_comment = NULL
 WHERE func_addr = 0x401000
-  AND ea = 0x401020
+  AND addr = 0x401020
   AND comment_placement = 'semi';
 ```
 
@@ -272,13 +272,13 @@ Length guidance:
 Canonical SQL pattern:
 
 ```sql
-SELECT address, name, comment, rpt_comment
+SELECT addr, name, comment, rpt_comment
 FROM funcs
-WHERE address = 0x401000;
+WHERE addr = 0x401000;
 
 UPDATE funcs
 SET rpt_comment = 'One-paragraph summary of what the function does, inputs/outputs, and key behavior.'
-WHERE address = 0x401000;
+WHERE addr = 0x401000;
 ```
 
 Prompt examples:
@@ -295,7 +295,7 @@ Read disassembly-level comments from the `comments` table:
 ```sql
 SELECT COALESCE(NULLIF(comment, ''), NULLIF(rpt_comment, '')) AS comment
 FROM comments
-WHERE address = 0x401000
+WHERE addr = 0x401000
 LIMIT 1;
 ```
 
@@ -308,10 +308,10 @@ The `comments` table supports INSERT, UPDATE, and DELETE:
 | `comments` | Yes | `comment`, `rpt_comment` | Yes |
 
 ```sql
-INSERT INTO comments(address, comment) VALUES (0x401000, 'regular comment');
-INSERT INTO comments(address, rpt_comment) VALUES (0x401000, 'repeatable comment');
-UPDATE comments SET comment = 'updated comment' WHERE address = 0x401000;
-DELETE FROM comments WHERE address = 0x401000;
+INSERT INTO comments(addr, comment) VALUES (0x401000, 'regular comment');
+INSERT INTO comments(addr, rpt_comment) VALUES (0x401000, 'repeatable comment');
+UPDATE comments SET comment = 'updated comment' WHERE addr = 0x401000;
+DELETE FROM comments WHERE addr = 0x401000;
 ```
 
 Notes:
@@ -327,7 +327,7 @@ The `bookmarks` table supports full CRUD for editing marked positions and folder
 | Column | Type | Description |
 |--------|------|-------------|
 | `slot` | INT | Bookmark slot index |
-| `address` | INT | Bookmarked address |
+| `addr` | INT | Bookmarked address |
 | `description` | TEXT | Bookmark description |
 | `inode` | INT | Read-only dirtree inode |
 | `folder_path` | TEXT | Writable bookmark folder; `NULL` means root |
@@ -335,10 +335,10 @@ The `bookmarks` table supports full CRUD for editing marked positions and folder
 
 ```sql
 -- List all bookmarks
-SELECT printf('0x%X', address) as addr, description, folder_path FROM bookmarks;
+SELECT printf('0x%X', addr) as addr, description, folder_path FROM bookmarks;
 
 -- Edit: Add bookmark
-INSERT INTO bookmarks (address, description) VALUES (0x401000, 'interesting branch');
+INSERT INTO bookmarks (addr, description) VALUES (0x401000, 'interesting branch');
 
 -- Edit: Update bookmark description
 UPDATE bookmarks SET description = 'confirmed branch' WHERE slot = 0;
@@ -398,7 +398,7 @@ Read the current labels first, then rename the exact label you observed. Prefer 
 
 ```sql
 -- Inspect labels before renaming
-SELECT label_num, name, printf('0x%X', item_ea) AS item_ea
+SELECT label_num, name, printf('0x%X', item_addr) AS item_addr
 FROM ctree_labels
 WHERE func_addr = 0x401000
 ORDER BY label_num;
@@ -423,10 +423,10 @@ Quick apply patterns used in annotation workflows:
 ```sql
 -- Apply type to a function
 UPDATE funcs SET prototype = 'void __fastcall exec_command(command_t *cmd);'
-WHERE address = 0x140001BD0;
+WHERE addr = 0x140001BD0;
 
 -- Apply/replace the type at any mapped address
-INSERT INTO applied_types(address, decl)
+INSERT INTO applied_types(addr, decl)
 VALUES (0x140001BD0, 'void __fastcall exec_command(command_t *cmd);');
 ```
 
@@ -440,22 +440,22 @@ The `instructions` table `operand*_format_spec` columns allow editing operand di
 -- Edit: Apply enum representation to operand 1
 UPDATE instructions
 SET operand1_format_spec = 'enum:MY_ENUM'
-WHERE address = 0x401020;
+WHERE addr = 0x401020;
 
 -- Edit: Apply struct-offset representation
 UPDATE instructions
 SET operand0_format_spec = 'stroff:MY_STRUCT,delta=0'
-WHERE address = 0x401030;
+WHERE addr = 0x401030;
 
 -- Edit: Nested member path uses '/' to separate type names
 UPDATE instructions
 SET operand0_format_spec = 'stroff:OUTER_T/INNER_T'
-WHERE address = 0x401030;
+WHERE addr = 0x401030;
 
 -- Edit: Clear representation back to plain
 UPDATE instructions
 SET operand1_format_spec = 'clear'
-WHERE address = 0x401020;
+WHERE addr = 0x401020;
 ```
 
 All of these work at the disassembly level — no IDAPython needed. The UPDATE is
@@ -466,16 +466,16 @@ display forms:
 
 ```sql
 -- Number base / character
-UPDATE instructions SET operand1_format_spec = 'hex'  WHERE address = 0x401020;  -- also dec/oct/bin
-UPDATE instructions SET operand1_format_spec = 'char' WHERE address = 0x401020;
+UPDATE instructions SET operand1_format_spec = 'hex'  WHERE addr = 0x401020;  -- also dec/oct/bin
+UPDATE instructions SET operand1_format_spec = 'char' WHERE addr = 0x401020;
 
 -- Offsets, sizeof, forced operand text
-UPDATE instructions SET operand1_format_spec = 'offset:tbl_start' WHERE address = 0x401020;
-UPDATE instructions SET operand1_format_spec = 'sizeof:MY_STRUCT' WHERE address = 0x401020;
-UPDATE instructions SET operand1_format_spec = 'forced:5 shl 3'   WHERE address = 0x401020;
+UPDATE instructions SET operand1_format_spec = 'offset:tbl_start' WHERE addr = 0x401020;
+UPDATE instructions SET operand1_format_spec = 'sizeof:MY_STRUCT' WHERE addr = 0x401020;
+UPDATE instructions SET operand1_format_spec = 'forced:5 shl 3'   WHERE addr = 0x401020;
 
 -- Sign / bitwise-not modifiers (combine with a base, or use alone)
-UPDATE instructions SET operand1_format_spec = 'dec,signed' WHERE address = 0x401020;
+UPDATE instructions SET operand1_format_spec = 'dec,signed' WHERE addr = 0x401020;
 ```
 
 Other kinds: `float`, `segment`, `stkvar`, and the `,unsigned` / `,bnot` /
@@ -528,7 +528,7 @@ When editing many functions or annotations, keep these costs in mind:
   UPDATE ctree_lvars SET name = 'size' WHERE func_addr = 0x401000 AND idx = 1;
   SELECT decompile(0x401000, 1);  -- final refresh after cleanup
   ```
-- **`pseudocode` comment writes are lightweight** — they persist to IDA's user comments store without triggering re-decompilation. You can write comments to many functions without calling `decompile(addr, 1)` between each.
+- **`pseudocode` comment writes (re)decompile the target function** — each write decompiles the containing function to resolve the comment anchor, persists to IDA's user comments store, then invalidates that function's decompiler cache so the next `decompile(addr)` re-renders. You do not need to call `decompile(addr, 1)` yourself between comment writes, but the write is not free — it costs one decompilation of that function.
 - **`ctree_lvars` type changes invalidate the decompiler cache** — after changing a variable type, refresh before you trust `idx`/name-based cleanup. The decompiler may split locals or re-render expressions.
 - **`save_database()` can be costly** on large databases. Batch all writes and save once at the end of an annotation campaign, not after each edit.
 

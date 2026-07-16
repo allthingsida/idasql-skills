@@ -40,7 +40,7 @@ Examples:
   idasql -s test.i64 --export dump.sql
   idasql -s test.i64 --http 8080
   idasql -s sample.exe --http            # raw PE: idalib auto-analyzes, then serves SQL (default port 8080)
-  idasql -s firmware.bin -q "SELECT * FROM welcome"
+  idasql -s firmware.bin -q "SELECT * FROM binary"
   idasql -s test.i64 --mcp 9000
 ```
 
@@ -55,6 +55,23 @@ manual `idat -A -B` / `ida -B` pre-step is needed — point `-s` straight at the
 - Canonical schema catalog: [references/schema-catalog.md](references/schema-catalog.md)
 - CLI reference, REPL commands, server modes, runtime controls: [references/cli-reference.md](references/cli-reference.md)
   (includes `.pin` autostart: the IDA plugin can auto-start a pinned HTTP/MCP server when a database is opened)
+
+### Autostart pinning (HTTP/MCP)
+
+`.pin http|mcp [bindinterface] [port]` pins a server so the **IDA plugin
+auto-starts it when the database opens** (the pin lives in the IDB; CLI changes
+persist only with `-w`). The port is **optional**:
+
+- **Fixed port** — `.pin http 0.0.0.0 8080` → autostarts on that stable port every
+  launch (use for stable automation).
+- **Random port** — `.pin http` (port omitted, stored as `0`) → autostarts on a
+  **fresh random port each launch** (a real pinned setting, not "unset"); read the
+  chosen port from the live status. `.pin status` shows `<random port each launch>`.
+
+`[bindinterface]` is the host/interface (default `127.0.0.1`). `.pin on|off http|mcp`
+toggles autostart without dropping the host/port; `.pin clear [http|mcp|all]` removes
+it. `.http start` / `.mcp start` with no port reuse the pinned host/port. Full grammar:
+[references/cli-reference.md](references/cli-reference.md).
 - Optimization quality gate: [references/optimization-checklist.md](references/optimization-checklist.md)
 - HTTP server guide: [references/server-guide.md](references/server-guide.md)
 
@@ -80,13 +97,14 @@ manual `idat -A -B` / `ida -B` pre-step is needed — point `-s` straight at the
   `{success, statement_count, results:[{statement_index, success,
   columns, rows, row_count, elapsed_ms, error}], row_count_total,
   elapsed_ms_total, first_error_index}`.
-  Fail-fast is the default; pass `continue_on_error=true` (HTTP query
-  string or MCP arg) to run every statement regardless of earlier
-  failures.
+  Fail-fast is the default. Only the REPL/plugin `.http` server honors
+  `?continue_on_error=1` in the query string to run every statement
+  regardless of earlier failures; the CLI `--http` handler ignores it
+  and MCP has no such argument.
 - Discover schema before writing queries:
   - REPL: `.schema <table>`
   - SQL: `PRAGMA table_xinfo(<table>);`
-- Start orientation with `SELECT * FROM welcome;`.
+- Start orientation with `SELECT * FROM binary;`.
 
 ---
 
@@ -110,7 +128,7 @@ Use this exact startup flow before deep analysis:
    JSON `reopen_with` path before running orientation.
 2. Run orientation query:
 ```sql
-SELECT * FROM welcome;
+SELECT * FROM binary;
 ```
 3. Validate key entities exist:
 ```sql
@@ -133,7 +151,7 @@ These contracts apply across all idasql skills and should be treated as one shar
 
 ### Read-First Contract
 - Read current state first (`SELECT`) before writes (`INSERT`/`UPDATE`/`DELETE`).
-- Confirm target precision using stable identifiers (`address`, `func_addr`, `idx`, `label_num`).
+- Confirm target precision using stable identifiers (`addr`, `func_addr`, `idx`, `label_num`).
 
 ### Anti-Guessing Contract
 - Do not assume columns/types for long-tail surfaces.
@@ -159,7 +177,7 @@ These contracts apply across all idasql skills and should be treated as one shar
 ### Output Contract
 - **Selection** - decide *whether and how much* to surface from user intent. Answer questions directly ("biggest is `main`, 500 bytes"); show supporting rows only when they help the user verify; don't dump full tables unprompted; never surface data fetched only as an intermediate reasoning step.
 - **Fidelity** - when you *do* present code/data, show the real artifact (decompilation, actual rows), never a paraphrase.
-- **Mechanics** - the HTTP `/query` response is a JSON envelope (`{success, results:[{columns,rows,...}]}`). Consume it directly and render in your reply. Do **not** pipe responses through `python`/`jq` to pre-render a table - that discards the `success`/`elapsed_ms`/`error` fields and makes you reason over a lossy view. The CLI (`-c`/`-f`) already prints a table. Reserve `jq`/`python` for extracting a value to feed a later query. (For direct terminal/pipe use the server can emit `?format=text|csv|tsv`; as an agent, consume `json`.)
+- **Mechanics** - the HTTP `/query` response is a JSON envelope (`{success, results:[{columns,rows,...}]}`). Consume it directly and render in your reply. Do **not** pipe responses through `python`/`jq` to pre-render a table - that discards the `success`/`elapsed_ms`/`error` fields and makes you reason over a lossy view. The CLI (`-q`/`-f`) already prints a table. Reserve `jq`/`python` for extracting a value to feed a later query. (For direct terminal/pipe use the server can emit `?format=text|csv|tsv`; as an agent, consume `json`.)
 
 ---
 
@@ -171,9 +189,9 @@ Use this deterministic mapping for initial routing:
 |-------------|---------------|---------------------|
 | "what does this binary do?" / triage | `analysis` | `SELECT * FROM entries;` |
 | disassembly, segments, instructions | `disassembly` | `SELECT * FROM funcs LIMIT 20;` |
-| function/type folders, review buckets, folder lifecycle | `annotations` / `types` | `SELECT address, name, folder_path FROM funcs WHERE folder_path LIKE 'idasql/%';` |
-| xrefs/callers/callees/import dependencies | `xrefs` | `SELECT * FROM xrefs WHERE to_ea = ...;` |
-| find functions/types/labels/members by name pattern | `grep` | `SELECT name, kind, address FROM grep WHERE pattern = 'main' LIMIT 20;` |
+| function/type folders, review buckets, folder lifecycle | `annotations` / `types` | `SELECT addr, name, folder_path FROM funcs WHERE folder_path LIKE 'idasql/%';` |
+| xrefs/callers/callees/import dependencies | `xrefs` | `SELECT * FROM xrefs WHERE to_addr = ...;` |
+| find functions/types/labels/members by name pattern | `grep` | `SELECT name, kind, addr FROM grep WHERE pattern = 'main' LIMIT 20;` |
 | strings/bytes/pattern search | `data` | `SELECT * FROM strings LIMIT 20;` |
 | decompile/pseudocode/ctree/lvars | `decompiler` | `SELECT decompile(0x...);` |
 | comments/renames/retyping/bookmarks | `annotations` | `SELECT ...` on target row before update |
@@ -181,6 +199,7 @@ Use this deterministic mapping for initial routing:
 | breakpoints/patching | `debugger` | `SELECT * FROM breakpoints;` |
 | persistent key/value notes | `storage` | `SELECT * FROM netnode_kv LIMIT 20;` |
 | SQL function lookup/signature recall | `functions` | `SELECT * FROM pragma_function_list;` |
+| enumerate runtime settings / timeouts / queue config | `connect` | `SELECT * FROM runtime_settings;` (read-only; change via `PRAGMA idasql.<key> = <value>`) |
 | live IDA UI context questions | `ui-context` | `SELECT get_ui_context_json();` (when available) |
 | IDA SDK-only logic not in SQL surfaces | `idapython` | `PRAGMA idasql.enable_idapython = 1; SELECT idapython_snippet('print(...)');` |
 | recursive source/structure recovery | `re-source` | start from function + recurse/handoff |
@@ -227,38 +246,50 @@ Runtime caveat:
 
 ---
 
-## welcome
+## binary
 
 Database orientation surface for quick session metadata.
 This is metadata-only and not a replacement for UI context capture.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `summary` | TEXT | One-line database summary |
-| `idasql_version` | TEXT | IDASQL build version (from `idasql_version.hpp`) |
-| `processor` | TEXT | Processor/module name |
-| `is_64bit` | INT | 1=64-bit database, 0=32-bit |
-| `min_ea` | TEXT | Minimum address in database |
-| `max_ea` | TEXT | Maximum address in database |
-| `start_ea` | TEXT | Entry/start address |
-| `entry_name` | TEXT | Entry symbol name (if known) |
-| `funcs_count` | INT | Number of detected functions |
-| `segments_count` | INT | Number of segments |
-| `names_count` | INT | Number of named addresses |
-| `strings_count` | INT | Current IDA string-list count |
-| `filename` | TEXT | Bare input filename (no path) |
-| `input_file_path` | TEXT | Original input file path recorded in the IDB |
-| `idb_path` | TEXT | On-disk path of the IDB/I64 (may differ if moved) |
-| `md5` | TEXT | Lowercase hex MD5 of the input file (empty if unavailable) |
-| `sha256` | TEXT | Lowercase hex SHA-256 of the input file (empty if unavailable) |
+Key/value shape — `(key TEXT, value TEXT, type TEXT)`, one row per metadata
+fact, `type ∈ {string, hex, bool, int}`. The shape and the canonical key names
+are shared across the tool family, so the same `WHERE key = '…'` query works on
+every engine. The `summary` row is emitted first, so `SELECT * FROM binary`
+shows the digest up top.
 
-Use `filename`, `idb_path`, `md5`, or `sha256` to confirm which binary/instance
-this connection is bound to.
+| Key | Type | Description |
+|-----|------|-------------|
+| `summary` | string | One-line database summary (first row) |
+| `tool_name` | string | Always `idasql` |
+| `tool_version` | string | IDASQL build version (canonical name) |
+| `idasql_version` | string | IDASQL build version (legacy-named duplicate) |
+| `processor` | string | Processor/module name |
+| `filetype` | string | Loader file-type description (e.g. PE, ELF) |
+| `image_base` | hex | Image base address |
+| `entry_point` | hex | Entry/start address (was the `start_addr` column) |
+| `min_addr` | hex | Minimum address in database |
+| `max_addr` | hex | Maximum address in database |
+| `is_64bit` | bool | `true`/`false` |
+| `bits` | int | Application bitness: 16, 32, or 64 |
+| `endianness` | string | `little` or `big` |
+| `filename` | string | Bare input filename (no path) |
+| `entry_name` | string | Entry symbol name (if known) |
+| `funcs_count` | int | Number of detected functions |
+| `segments_count` | int | Number of segments |
+| `names_count` | int | Number of named addresses |
+| `strings_count` | int | Current IDA string-list count |
+| `input_file_path` | string | Original input file path recorded in the IDB |
+| `idb_path` | string | On-disk path of the IDB/I64 (may differ if moved) |
+| `md5` | string | Lowercase hex MD5 of the input file (empty if unavailable) |
+| `sha256` | string | Lowercase hex SHA-256 of the input file (empty if unavailable) |
+
+Use the `filename`, `idb_path`, `md5`, or `sha256` keys to confirm which
+binary/instance this connection is bound to.
 
 ```sql
-SELECT * FROM welcome;
-SELECT filename, idb_path, md5, sha256 FROM welcome;
-SELECT idasql_version, filename, idb_path, md5, sha256 FROM welcome;
+SELECT * FROM binary;
+SELECT key, value FROM binary WHERE key IN ('filename','idb_path','md5','sha256');
+SELECT value FROM binary WHERE key = 'idasql_version';
 ```
 
 For canonical schema and owner mapping, see `references/schema-catalog.md`.
@@ -285,7 +316,7 @@ For canonical schema and owner mapping, see `references/schema-catalog.md`.
 ## Core Concepts for Binary Analysis
 
 ### Addresses (ea_t)
-Everything in a binary has an **address** - a memory location where code or data lives. IDA uses `ea_t` (effective address) as unsigned 64-bit integers. SQL shows these as integers; use `printf('0x%X', address)` for hex display.
+Everything in a binary has an **address** - a memory location where code or data lives. IDA uses `ea_t` (effective address) as unsigned 64-bit integers. SQL shows these as integers; use `printf('0x%X', addr)` for hex display.
 
 Address-taking SQL functions accept:
 - integer EA values (preferred for deterministic scripts)
@@ -293,7 +324,7 @@ Address-taking SQL functions accept:
 - symbol names resolved with `get_name_ea(BADADDR, name)` (global names)
 
 Most table predicates should compare address columns to integer EAs such as
-`address = 0x401000`. `applied_types.address` is an intentional exception for
+`addr = 0x401000`. `applied_types.addr` is an intentional exception for
 equality filters/writes: it also accepts numeric strings and symbol names so
 type application can target names directly.
 
@@ -302,8 +333,8 @@ Examples:
 SELECT decompile('DriverEntry');
 UPDATE applied_types
 SET decl = 'NTSTATUS DriverEntry(PDRIVER_OBJECT, PUNICODE_STRING);'
-WHERE address = 'DriverEntry';
-SELECT (SELECT comment FROM comments WHERE address = 0x401000 LIMIT 1);
+WHERE addr = 'DriverEntry';
+SELECT (SELECT comment FROM comments WHERE addr = 0x401000 LIMIT 1);
 ```
 
 Read address comments from the `comments` table after resolving the target EA.
@@ -315,24 +346,25 @@ Local label lookup that depends on a specific `from` context is not consulted by
 
 ### Functions
 IDA groups code into **functions** with:
-- `address` / `start_ea` - Where the function begins
-- `end_ea` - Where it ends
+- `addr` / `start_addr` - Where the function begins
+- `end_addr` - Where it ends
 - `name` - Assigned or auto-generated name (e.g., `main`, `sub_401000`)
 - `size` - Total bytes in the function
 
 There will be addresses and disassembly listing not belonging to a function. IDASQL can still get the bytes, disassembly listing ranges, etc.
-For single-EA disassembly (code or data), prefer `disasm_at(ea[, context])` over function-scoped queries.
+For single-EA disassembly (code or data), prefer `disasm_at(addr[, context])` over function-scoped queries.
 
 ### Cross-References (xrefs)
 Binary analysis is about understanding **relationships**:
 - **Code xrefs** - Function calls, jumps between code
 - **Data xrefs** - Code reading/writing data locations, or data referring to other data (pointers)
-- `from_ea` -> `to_ea` represents "address X references address Y"
-Use table: `xrefs(from_ea, to_ea, type, is_code)`.
+- `from_addr` -> `to_addr` represents "address X references address Y"
+Use table: `xrefs(from_addr, to_addr, type, is_code)`.
 
 ### Segments
 
-Use table: `segments(start_ea, end_ea, name, class, perm)`.
+Use table: `segments(start_addr, end_addr, name, class, perm)` (full CRUD).
+`UPDATE start_addr` rebases a segment, `end_addr` resizes it.
 
 Memory is divided into **segments** with different purposes. For example, a typical PE file, has these segments:
 
@@ -348,7 +380,7 @@ Within a function, **basic blocks** are straight-line code sequences:
 - No branches in the middle
 - Single entry, single exit
 - Useful for control flow analysis
-Use table: `blocks(start_ea, end_ea, func_ea, size)`.
+Use table: `blocks(start_addr, end_addr, func_addr, size)`.
 
 ### Decompilation (Hex-Rays)
 The **Hex-Rays decompiler** converts assembly to C-like **pseudocode**:
@@ -364,8 +396,8 @@ Core decompiler surfaces:
     - Non-anchored line: `/*          */ ...` (no address anchor for that line)
   - Use this first when the user asks to "decompile", "show code", "show pseudocode", or "explain function logic".
 - `pseudocode` table (**structured/edit surface**)
-  - Use for line-level filtering (`func_addr`, `ea`, `line_num`) and comment writes keyed by `ea + comment_placement`.
-  - Resolve a writable pseudocode anchor first; do not assume `ea == func_addr`.
+  - Use for line-level filtering (`func_addr`, `addr`, `line_num`) and comment writes keyed by `addr + comment_placement`.
+  - Resolve a writable pseudocode anchor first; do not assume `addr == func_addr`.
   - Not the preferred display surface for full-function code.
 - `ctree` and `ctree_call_args` for AST-level analysis
 - `ctree_lvars` for local variable rename/type/comment updates
@@ -381,8 +413,8 @@ Some tables have **optimized filters** that use efficient IDA SDK APIs:
 | Table | Optimized Filter | Without Filter |
 |-------|------------------|----------------|
 | `instructions` | `func_addr = X` | O(all instructions) - SLOW |
-| `blocks` | `func_ea = X` | O(all blocks) |
-| `xrefs` | `to_ea = X` or `from_ea = X` | O(all xrefs) |
+| `blocks` | `func_addr = X` | O(all blocks) |
+| `xrefs` | `to_addr = X` or `from_addr = X` | O(all xrefs) |
 | `pseudocode` | `func_addr = X` | **Decompiles ALL functions** |
 | `ctree*` | `func_addr = X` | **Decompiles ALL functions** |
 
@@ -402,10 +434,10 @@ WHERE itype IN (16, 18)  -- x86 call opcodes
 
 ```sql
 -- SLOW: O(n) - sorts all rows
-SELECT address FROM funcs ORDER BY RANDOM() LIMIT 1;
+SELECT addr FROM funcs ORDER BY RANDOM() LIMIT 1;
 
 -- FAST: O(1) - direct index access
-SELECT address
+SELECT addr
 FROM funcs
 WHERE rowid = ABS(RANDOM()) % (SELECT COUNT(*) FROM funcs);
 ```
@@ -416,16 +448,16 @@ For instruction lifecycle edits, use a CTE to identify precise targets first, th
 
 ```sql
 WITH target AS (
-    SELECT address
+    SELECT addr
     FROM instructions
     WHERE func_addr = 0x401000
-    ORDER BY address DESC
+    ORDER BY addr DESC
     LIMIT 1
 )
 DELETE FROM instructions
-WHERE address IN (SELECT address FROM target);
+WHERE addr IN (SELECT addr FROM target);
 
-SELECT make_code_range(address, end_ea) FROM funcs WHERE address = 0x401000;
+SELECT make_code_range(addr, end_addr) FROM funcs WHERE addr = 0x401000;
 ```
 
 This keeps mutation scope explicit and predictable for both humans and agents.
@@ -436,7 +468,7 @@ This keeps mutation scope explicit and predictable for both humans and agents.
 
 | Goal | Table/Function |
 |------|----------------|
-| List all functions | `funcs` (cols: `address`, `name`, `end_ea`, `prototype`, `flags`, …) → `disassembly` |
+| List all functions | `funcs` (cols: `addr`, `name`, `end_addr`, `prototype`, `flags`, …) → `disassembly` |
 | Functions by return type | `funcs WHERE return_is_integral = 1` |
 | Functions by arg count | `funcs WHERE arg_count >= N` |
 | Void functions | `funcs WHERE return_is_void = 1` |
@@ -444,18 +476,18 @@ This keeps mutation scope explicit and predictable for both humans and agents.
 | Functions by calling convention | `funcs WHERE calling_conv = 'fastcall'` |
 | Find who calls what | `xrefs` with `is_code = 1` |
 | Find data references | `xrefs` with `is_code = 0` |
-| Analyze imports | `imports` (cols: `address`, `name`, `ordinal`, `module`) → `xrefs` / `analysis` |
-| Find strings | `strings` (cols: `address`, `length`, `content`) → `data` |
-| Configure string types | `rebuild_strings(types, minlen)` |
+| Analyze imports | `imports` (cols: `addr`, `name`, `ordinal`, `module`) → `xrefs` / `analysis` |
+| Find strings | `strings` (cols: `addr`, `length`, `content`) → `data` |
+| Configure string types | `rebuild_strings(minlen, types)` |
 | Instruction analysis | `instructions WHERE func_addr = X` |
 | Recreate deleted instructions | `make_code(addr)`, `make_code_range(start, end)` |
 | Apply/clear address type declarations | `applied_types` (`INSERT`, `UPDATE decl`, `DELETE`) |
-| Apply/clear call-site prototypes | `UPDATE disasm_calls SET callee_type = ... WHERE ea = X` |
-| Create function at EA | `INSERT INTO funcs(address) VALUES (...)` |
+| Apply/clear call-site prototypes | `UPDATE disasm_calls SET callee_type = ... WHERE addr = X` |
+| Create function at EA | `INSERT INTO funcs(addr) VALUES (...)` |
 | View function disassembly | `disasm_func(addr)` or `disasm_range(start, end)` |
 | View decompiled code | `decompile(addr)` |
 | UI/screen context questions | `ui-context` skill (`get_ui_context_json()`, plugin UI only) |
-| Edit decompiler comments | `Resolve writable anchor, then UPDATE pseudocode SET comment = '...' WHERE func_addr = X AND ea = Y` |
+| Edit decompiler comments | `Resolve writable anchor, then UPDATE pseudocode SET comment = '...' WHERE func_addr = X AND addr = Y` |
 | AST pattern matching | `ctree WHERE func_addr = X` |
 | Call patterns | `ctree_v_calls`, `disasm_calls` |
 | Control flow | `ctree_v_loops`, `ctree_v_ifs` |
@@ -474,7 +506,7 @@ This keeps mutation scope explicit and predictable for both humans and agents.
 | Rename decompiler labels | `UPDATE ctree_labels SET name=... WHERE func_addr=... AND label_num=...` |
 | Delete instructions | `instructions` (DELETE converts to unexplored bytes) |
 | Recreate instructions | `make_code`, `make_code_range` |
-| Bulk patch from file bytes | `load_file_bytes(path, file_offset, address, size[, patchable])` |
+| Bulk patch from file bytes | `load_file_bytes(path, file_offset, addr, size[, patchable])` |
 | EA to physical offset mapping | `bytes.fpos` on mapped byte rows (`NULL` means no file offset) |
 | Create types | `types` (INSERT struct/union/enum) |
 | Add struct members | `types_members` (INSERT) |

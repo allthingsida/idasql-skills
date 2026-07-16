@@ -8,7 +8,7 @@ Use this view to find call sites whose callee is not a direct `cot_obj` or `cot_
 |--------|------|-------------|
 | `func_addr` | INT | Function address |
 | `call_item_id` | INT | Call expression item ID |
-| `call_ea` | INT | Call instruction EA |
+| `call_addr` | INT | Call instruction EA |
 | `target_item_id` | INT | Callee expression item ID |
 | `target_op` | TEXT | Callee expression opcode (`cot_var`, `cot_cast`, etc.) |
 | `target_var_idx` | INT | Local-variable index when target is a variable |
@@ -18,10 +18,10 @@ Use this view to find call sites whose callee is not a direct `cot_obj` or `cot_
 | `arg_count` | INT | Flattened argument count from `ctree_call_args` |
 
 ```sql
-SELECT call_ea, target_op, target_var_name, arg_count
+SELECT call_addr, target_op, target_var_name, arg_count
 FROM ctree_v_indirect_calls
 WHERE func_addr = 0x140001BD0
-ORDER BY call_ea;
+ORDER BY call_addr;
 ```
 
 ## ctree_v_returns
@@ -32,7 +32,7 @@ Return statements with details about what's being returned.
 |--------|------|-------------|
 | `func_addr` | INT | Function address |
 | `item_id` | INT | Return statement item_id |
-| `ea` | INT | Address of return |
+| `addr` | INT | Address of return |
 | `return_op` | TEXT | Return value opcode (`cot_num`, `cot_var`, `cot_call`, etc.) |
 | `return_num` | INT | Numeric value (if `cot_num`) |
 | `return_str` | TEXT | String value (if `cot_str`) |
@@ -42,14 +42,14 @@ Return statements with details about what's being returned.
 
 ```sql
 -- Functions that return 0
-SELECT DISTINCT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) as name FROM ctree_v_returns
+SELECT DISTINCT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) as name FROM ctree_v_returns
 WHERE return_op = 'cot_num' AND return_num = 0;
 
 -- Functions that return -1 (error sentinel)
-SELECT DISTINCT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) as name FROM ctree_v_returns
+SELECT DISTINCT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) as name FROM ctree_v_returns
 WHERE return_op = 'cot_num' AND return_num = -1;
 
 -- Functions that return their argument (pass-through)
-SELECT DISTINCT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) as name FROM ctree_v_returns
+SELECT DISTINCT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) as name FROM ctree_v_returns
 WHERE returns_arg = 1;
 ```

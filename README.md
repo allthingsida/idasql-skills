@@ -1,6 +1,6 @@
 # idasql-skills
 
-Claude Code and Codex plugin packaging for [idasql](https://github.com/allthingsida/idasql) — a [live SQL](https://github.com/0xeb/libxsql) interface to IDA Pro databases.
+Claude Code / Copilot CLI and Codex plugin packaging for [idasql](https://github.com/allthingsida/idasql) — a [live SQL](https://github.com/0xeb/libxsql) interface to IDA Pro databases.
 
 ## Prerequisites
 
@@ -10,7 +10,7 @@ Claude Code and Codex plugin packaging for [idasql](https://github.com/allthings
 
 ## Installation
 
-### Claude Code
+### Claude Code / Copilot CLI
 
 ```bash
 /plugin marketplace add allthingsida/idasql-skills
@@ -79,6 +79,7 @@ If you want to test directly from a checkout, keep the repo where it is and use 
 | Skill | Description | When to Use |
 |-------|-------------|-------------|
 | `connect` | Connection, CLI, HTTP, UI context, routing index | Starting a session, CLI options, HTTP server, pragmas |
+| `ui-context` | Live IDA GUI state capture | What's on screen, current selection/view, active widget |
 | `disassembly` | Functions, segments, instructions, blocks | Querying disassembly, instruction analysis, file generation |
 | `data` | Strings, bytes, string cross-references | String search, byte access, binary pattern search |
 | `grep` | Named entity search | Find functions, labels, types, and members by pattern |
@@ -109,4 +110,4 @@ If you want to test directly from a checkout, keep the repo where it is and use 
 
 ## License
 
-This project and all its contents — including skill definitions, reference documentation, and configuration files — are licensed under the [Mozilla Public License 2.0](LICENSE).
+This project and all its contents — including skill definitions, reference documentation, and configuration files — are licensed under the [Human-Origin Source License v1.0](LICENSE).

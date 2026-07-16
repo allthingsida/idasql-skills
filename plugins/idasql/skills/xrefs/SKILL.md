@@ -40,39 +40,43 @@ GROUP BY module
 ORDER BY import_count DESC;
 
 -- 3) Most called functions
-SELECT printf('0x%X', to_ea) AS callee, COUNT(*) AS callers
+SELECT printf('0x%X', to_addr) AS callee, COUNT(*) AS callers
 FROM xrefs
 WHERE is_code = 1
-GROUP BY to_ea
+GROUP BY to_addr
 ORDER BY callers DESC
 LIMIT 20;
 ```
 
 Interpretation guidance:
 - Use relation counts to prioritize hotspots before expensive deep analysis.
-- Prefer indexed filters (`to_ea`/`from_ea`) for fast response.
+- Prefer indexed filters (`to_addr`/`from_addr`) for fast response.
 
 ---
 
 ## Failure and Recovery
 
 - Full-scan query too slow:
-  - Add `to_ea = X` or `from_ea = X` constraints.
+  - Add `to_addr = X` or `from_addr = X` constraints.
 - Target unresolved by name:
   - Resolve/verify address first through the `names` table or explicit EA literals.
 - Sparse results:
   - Pivot through `imports`, `strings`, or `disasm_calls` joins.
+- Looking for references to a struct/union FIELD:
+  - Use `struct_member_xrefs` (filter by `type_name`/`type_ordinal`/`member_id`).
+    Do NOT `LIKE`-scan `instructions.disasm` / `instruction_operands.text` for the
+    field name — it is the slow, crash-adjacent pattern this table replaces.
 - Target lives inside a static struct or dispatch table:
   - In modern binaries a string/data target is often referenced from a
-    registration or vtable, not from code. `xrefs WHERE to_ea = X` may then
+    registration or vtable, not from code. `xrefs WHERE to_addr = X` may then
     return only `.rdata` rows. Walk back to the table head, then re-query
     xrefs against the *table's* address.
     ```sql
     -- 1) find the head of the item that contains the target
-    SELECT address FROM heads
-    WHERE address <= 0x140027D50 ORDER BY address DESC LIMIT 1;
+    SELECT addr FROM heads
+    WHERE addr <= 0x140027D50 ORDER BY addr DESC LIMIT 1;
     -- 2) xrefs into the table head (where the code consumer points)
-    SELECT * FROM xrefs WHERE to_ea = <head> AND is_code = 1;
+    SELECT * FROM xrefs WHERE to_addr = <head> AND is_code = 1;
     ```
 
 ---
@@ -90,18 +94,61 @@ Cross-references - the most important table for understanding code relationships
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `from_ea` | INT | Source address (who references) |
-| `to_ea` | INT | Target address (what is referenced) |
-| `type` | INT | Xref type code |
+| `from_addr` | INT | Source address (who references) |
+| `to_addr` | INT | Target address (what is referenced) |
+| `type` | INT | Xref type code (never the ordinary-flow code, see below) |
 | `is_code` | INT | 1=code xref (call/jump), 0=data xref |
-| `from_func` | INT | Pre-computed containing function address (0 when not in a function) |
+| `from_func` | INT | Pre-computed containing function address (NULL when not in a function) |
+
+Semantics: the surface exposes **real references only** — ordinary fall-through
+flow edges (fl_F: each instruction "referencing" the next) are excluded on both
+the full scan and the `to_addr`/`from_addr`/`from_func` fast paths, matching
+IDA's Ctrl-X view and the other xsql tools. Counts therefore reflect
+calls/jumps/data refs, not instruction adjacency.
 
 ```sql
 -- Who calls function at 0x401000?
-SELECT printf('0x%X', from_ea) as caller FROM xrefs WHERE to_ea = 0x401000 AND is_code = 1;
+SELECT printf('0x%X', from_addr) as caller FROM xrefs WHERE to_addr = 0x401000 AND is_code = 1;
 
 -- What does function at 0x401000 reference?
-SELECT printf('0x%X', to_ea) as target FROM xrefs WHERE from_ea >= 0x401000 AND from_ea < 0x401100;
+SELECT printf('0x%X', to_addr) as target FROM xrefs WHERE from_addr >= 0x401000 AND from_addr < 0x401100;
+```
+
+---
+
+## struct_member_xrefs
+Cross-references **to a specific struct/union member** (Issue 11). Resolves the
+member's IDA tid and enumerates xrefs directly — use this instead of `LIKE`
+scans over `instructions.disasm` / `instruction_operands.text`. **Requires a
+filter** on `type_ordinal`, `type_name`, or `member_id` (an unfiltered query
+errors). Embedded members are expanded recursively with a dotted `member_path`.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `type_ordinal` / `type_name` | INT/TEXT | Queried (top-level) type |
+| `member_index` | INT | Leaf index within its immediate parent type |
+| `member_name` / `member_path` | TEXT | Leaf name / dotted path (`payload.leaf.data`) |
+| `member_offset` / `member_offset_bits` | INT | Cumulative offset within the queried type |
+| `member_id` | INT | Member tid (also a filter key) |
+| `xref_from` | INT | Referencing address |
+| `xref_to` | INT | Member tid (== `member_id`) |
+| `xref_type` | INT | Raw IDA xref type code |
+| `xref_kind` | TEXT | `read` / `write` / `offset` / `call` / `jump` / `flow` |
+| `function_addr` / `function_name` | INT/TEXT | Containing function (NULL if none) |
+| `operand_index` | INT | Operand referencing the member (best-effort; NULL) |
+| `instruction_text` | TEXT | Disasm line at `xref_from` (NULL if not an instruction) |
+| `access_offset` / `access_size` | INT | Access sub-offset / width (best-effort; NULL) |
+
+```sql
+-- Who writes _EH3_EXCEPTION_REGISTRATION.TryLevel?
+SELECT member_path, xref_kind, function_name, instruction_text
+FROM struct_member_xrefs
+WHERE type_name = '_EH3_EXCEPTION_REGISTRATION' AND member_name = 'TryLevel';
+
+-- All member references for a type (incl. nested), grouped by member
+SELECT member_path, count(*) AS refs FROM struct_member_xrefs
+WHERE type_ordinal = (SELECT ordinal FROM types WHERE name = 'db_entry_t')
+GROUP BY member_path;
 ```
 
 ---
@@ -111,7 +158,7 @@ Imported functions from external libraries.
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `address` | INT | Import address (IAT entry) |
+| `addr` | INT | Import address (IAT entry) |
 | `name` | TEXT | Import name |
 | `module` | TEXT | Module/DLL name |
 | `ordinal` | INT | Import ordinal |
@@ -144,8 +191,8 @@ Who calls each function. Caller names are resolved by the view from the `funcs` 
 
 Underlying query:
 ```sql
-SELECT x.to_ea as func_addr, x.from_ea as caller_addr,
-       COALESCE((SELECT name FROM names WHERE address = x.from_func LIMIT 1), printf('sub_%X', x.from_func)) as caller_name,
+SELECT x.to_addr as func_addr, x.from_addr as caller_addr,
+       COALESCE((SELECT name FROM names WHERE addr = x.from_func LIMIT 1), printf('sub_%X', x.from_func)) as caller_name,
        x.from_func as caller_func_addr
 FROM xrefs x WHERE x.is_code = 1 AND x.from_func != 0
 ```
@@ -245,7 +292,7 @@ Table-valued function for BFS call graph traversal. Uses HIDDEN parameters for t
 ```sql
 -- Forward call tree from main
 SELECT func_name, depth FROM call_graph
-WHERE start = (SELECT address FROM funcs WHERE name = 'main')
+WHERE start = (SELECT addr FROM funcs WHERE name = 'main')
   AND direction = 'down' AND max_depth = 5;
 
 -- All transitive callers
@@ -266,7 +313,7 @@ WHERE cg.start = 0x401000 AND cg.direction = 'down' AND cg.max_depth = 3;
 SELECT DISTINCT i.module, i.name as api
 FROM call_graph cg
 JOIN disasm_calls dc ON dc.func_addr = cg.func_addr
-JOIN imports i ON dc.callee_addr = i.address
+JOIN imports i ON dc.callee_addr = i.addr
 WHERE cg.start = 0x401000 AND cg.direction = 'down' AND cg.max_depth = 5
 ORDER BY i.module, i.name;
 ```
@@ -295,8 +342,8 @@ are not valid `shortest_path` endpoints.
 ```sql
 -- Find shortest call path between two functions
 SELECT step, func_name FROM shortest_path
-WHERE from_addr = (SELECT address FROM funcs WHERE name = 'main')
-  AND to_addr = (SELECT address FROM funcs WHERE name = 'target_func')
+WHERE from_addr = (SELECT addr FROM funcs WHERE name = 'main')
+  AND to_addr = (SELECT addr FROM funcs WHERE name = 'target_func')
   AND max_depth = 20;
 
 -- Check reachability between two functions
@@ -320,17 +367,17 @@ Performance: Bidirectional BFS. O(b^(d/2)) where b is branching factor and d is 
 
 ```sql
 -- Incoming references to an address
-SELECT from_ea, to_ea, type, is_code, from_func
+SELECT from_addr, to_addr, type, is_code, from_func
 FROM xrefs
-WHERE to_ea = 0x401000;
+WHERE to_addr = 0x401000;
 
 -- Exact outgoing references from an item address
-SELECT from_ea, to_ea, type, is_code, from_func
+SELECT from_addr, to_addr, type, is_code, from_func
 FROM xrefs
-WHERE from_ea = 0x401000;
+WHERE from_addr = 0x401000;
 
 -- Outgoing references from anywhere inside a function
-SELECT from_ea, to_ea, type, is_code, from_func
+SELECT from_addr, to_addr, type, is_code, from_func
 FROM xrefs
 WHERE from_func = 0x401000;
 ```
@@ -345,13 +392,13 @@ For canonical schema and owner mapping, see `../connect/references/schema-catalo
 
 ```sql
 -- Resolve internal functions with grep
-SELECT name, kind, address
+SELECT name, kind, addr
 FROM grep
 WHERE pattern = 'main%' AND kind = 'function'
 ORDER BY name;
 
 -- Resolve imported APIs with imports
-SELECT module, name, address
+SELECT module, name, addr
 FROM imports
 WHERE name LIKE 'CreateFile%'
 ORDER BY module, name;
@@ -360,7 +407,7 @@ ORDER BY module, name;
 SELECT caller_name, printf('0x%X', caller_addr) AS from_addr
 FROM callers
 WHERE func_addr = (
-    SELECT address
+    SELECT addr
     FROM imports
     WHERE name = 'CreateFileW'
     ORDER BY name
@@ -378,19 +425,19 @@ The `xrefs` table has **optimized filters** using efficient IDA SDK APIs:
 
 | Filter | Cost | Behavior |
 |--------|------|----------|
-| `to_ea = X` | 0.5 | O(xrefs to X) — fast, uses IDA's xref index |
-| `from_ea = X` | 0.5 | O(xrefs from X) — fast, uses IDA's xref index |
+| `to_addr = X` | 0.5 | O(xrefs to X) — fast, uses IDA's xref index |
+| `from_addr = X` | 0.5 | O(xrefs from X) — fast, uses IDA's xref index |
 | `from_func = X` | 1.0 | O(callees of X) — uses XrefsFromFuncIterator |
-| No equality filter on `to_ea` / `from_ea` / `from_func` | — | Falls back to a cache of xrefs to function entry points only — avoid relying on it for complete import/data/non-function coverage |
+| No equality filter on `to_addr` / `from_addr` / `from_func` | — | Falls back to a cache of xrefs to function entry points only — avoid relying on it for complete import/data/non-function coverage |
 
-**Always filter xrefs by `to_ea`, `from_ea`, or `from_func`. Avoid unconstrained scans.**
+**Always filter xrefs by `to_addr`, `from_addr`, or `from_func`. Avoid unconstrained scans.**
 
 ```sql
 -- FAST: xrefs to a specific target
-SELECT * FROM xrefs WHERE to_ea = 0x401000;
+SELECT * FROM xrefs WHERE to_addr = 0x401000;
 
 -- FAST: xrefs from a specific source
-SELECT * FROM xrefs WHERE from_ea = 0x401000;
+SELECT * FROM xrefs WHERE from_addr = 0x401000;
 
 -- FAST: all xrefs originating from a function
 SELECT * FROM xrefs WHERE from_func = 0x401000;
@@ -408,9 +455,9 @@ SELECT * FROM xrefs WHERE is_code = 1;
 ```sql
 SELECT f.name, COUNT(*) as caller_count
 FROM funcs f
-JOIN xrefs x ON f.address = x.to_ea
+JOIN xrefs x ON f.addr = x.to_addr
 WHERE x.is_code = 1
-GROUP BY f.address
+GROUP BY f.addr
 ORDER BY caller_count DESC
 LIMIT 10;
 ```
@@ -418,17 +465,17 @@ LIMIT 10;
 ### Find Functions Calling a Specific API
 
 ```sql
-SELECT DISTINCT (SELECT name FROM funcs WHERE from_ea >= address AND from_ea < end_ea LIMIT 1) as caller
+SELECT DISTINCT (SELECT name FROM funcs WHERE from_addr >= addr AND from_addr < end_addr LIMIT 1) as caller
 FROM xrefs
-WHERE to_ea = (SELECT address FROM imports WHERE name = 'CreateFileW');
+WHERE to_addr = (SELECT addr FROM imports WHERE name = 'CreateFileW');
 ```
 
 ### String Cross-Reference Analysis
 
 ```sql
-SELECT s.content, (SELECT name FROM funcs WHERE x.from_ea >= address AND x.from_ea < end_ea LIMIT 1) as used_by
+SELECT s.content, (SELECT name FROM funcs WHERE x.from_addr >= addr AND x.from_addr < end_addr LIMIT 1) as used_by
 FROM strings s
-JOIN xrefs x ON s.address = x.to_ea
+JOIN xrefs x ON s.addr = x.to_addr
 WHERE s.content LIKE '%password%';
 ```
 
@@ -438,9 +485,9 @@ WHERE s.content LIKE '%password%';
 -- Which modules does each function depend on?
 SELECT f.name as func_name, i.module, COUNT(*) as api_count
 FROM funcs f
-JOIN disasm_calls dc ON dc.func_addr = f.address
-JOIN imports i ON dc.callee_addr = i.address
-GROUP BY f.address, i.module
+JOIN disasm_calls dc ON dc.func_addr = f.addr
+JOIN imports i ON dc.callee_addr = i.addr
+GROUP BY f.addr, i.module
 ORDER BY f.name, api_count DESC;
 ```
 
@@ -453,10 +500,10 @@ SELECT
     s.name as segment,
     COUNT(*) as data_refs
 FROM funcs f
-JOIN xrefs x ON x.from_ea BETWEEN f.address AND f.end_ea
-JOIN segments s ON x.to_ea BETWEEN s.start_ea AND s.end_ea
+JOIN xrefs x ON x.from_addr BETWEEN f.addr AND f.end_addr
+JOIN segments s ON x.to_addr BETWEEN s.start_addr AND s.end_addr
 WHERE s.class = 'DATA' AND x.is_code = 0
-GROUP BY f.address, s.name
+GROUP BY f.addr, s.name
 ORDER BY data_refs DESC
 LIMIT 20;
 ```
@@ -496,20 +543,20 @@ Find all functions reachable from a starting function (up to depth 5):
 ```sql
 -- Preferred: use call_graph table
 SELECT func_name, depth FROM call_graph
-WHERE start = (SELECT address FROM funcs WHERE name = 'main')
+WHERE start = (SELECT addr FROM funcs WHERE name = 'main')
   AND direction = 'down' AND max_depth = 5;
 
 -- Manual CTE (when custom filtering is needed at each step):
 WITH RECURSIVE cg AS (
-    SELECT address as func_addr, name, 0 as depth
+    SELECT addr as func_addr, name, 0 as depth
     FROM funcs WHERE name = 'main'
 
     UNION ALL
 
-    SELECT f.address, f.name, cg.depth + 1
+    SELECT f.addr, f.name, cg.depth + 1
     FROM cg
     JOIN disasm_calls dc ON dc.func_addr = cg.func_addr
-    JOIN funcs f ON f.address = dc.callee_addr
+    JOIN funcs f ON f.addr = dc.callee_addr
     WHERE cg.depth < 5
       AND dc.callee_addr != 0
 )
@@ -543,7 +590,7 @@ WITH RECURSIVE callers_cte AS (
     JOIN disasm_calls dc ON dc.callee_addr = c.func_addr
     WHERE c.depth < 5
 )
-SELECT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) as caller, MIN(depth) as distance
+SELECT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) as caller, MIN(depth) as distance
 FROM callers_cte
 GROUP BY func_addr
 ORDER BY distance, caller;
@@ -564,8 +611,8 @@ null_checkers AS (
 )
 SELECT f.name
 FROM funcs f
-JOIN malloc_callers m ON f.address = m.func_addr
-JOIN null_checkers n ON f.address = n.func_addr;
+JOIN malloc_callers m ON f.addr = m.func_addr
+JOIN null_checkers n ON f.addr = n.func_addr;
 ```
 
 ### CTE: Memory Allocation Without Free (Potential Leaks)
@@ -587,8 +634,8 @@ SELECT f.name,
        COALESCE(a.alloc_count, 0) as allocations,
        COALESCE(r.free_count, 0) as frees
 FROM funcs f
-LEFT JOIN allocators a ON f.address = a.func_addr
-LEFT JOIN freers r ON f.address = r.func_addr
+LEFT JOIN allocators a ON f.addr = a.func_addr
+LEFT JOIN freers r ON f.addr = r.func_addr
 WHERE a.alloc_count > 0 AND COALESCE(r.free_count, 0) = 0
 ORDER BY allocations DESC;
 ```
@@ -602,8 +649,8 @@ SELECT f.name
 FROM funcs f
 WHERE EXISTS (
     SELECT 1 FROM xrefs x
-    JOIN strings s ON x.to_ea = s.address
-    WHERE x.from_ea BETWEEN f.address AND f.end_ea
+    JOIN strings s ON x.to_addr = s.addr
+    WHERE x.from_addr BETWEEN f.addr AND f.end_addr
 );
 ```
 
@@ -614,7 +661,7 @@ SELECT f.name, f.size
 FROM funcs f
 WHERE NOT EXISTS (
     SELECT 1 FROM disasm_calls dc
-    WHERE dc.func_addr = f.address
+    WHERE dc.func_addr = f.addr
 )
 ORDER BY f.size DESC;
 ```
@@ -624,5 +671,5 @@ ORDER BY f.size DESC;
 ## See Also
 
 - `disassembly` — call-site context (`disasm_at`, `disasm_calls`, operand-level reads).
-- `data` — string/data targets behind a `to_ea`; the canonical pivot when xrefs returns `.rdata`-only rows.
+- `data` — string/data targets behind a `to_addr`; the canonical pivot when xrefs returns `.rdata`-only rows.
 - `decompiler` — calling-code logic and indirect-call resolution via callee types.

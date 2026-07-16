@@ -10,7 +10,7 @@ This means: `a1` is a pointer to a struct with a `DWORD` field at offset `0x10`.
 
 ```sql
 -- Find all offset accesses on a parameter
-SELECT ea, num_value as offset, op_name
+SELECT addr, num_value as offset, op_name
 FROM ctree WHERE func_addr = 0x401000
   AND op_name = 'cot_add'
   AND num_value IS NOT NULL
@@ -41,7 +41,7 @@ This means:
 
 ```sql
 -- Find vtable-like patterns: calls through double-deref
-SELECT ea, op_name FROM ctree
+SELECT addr, op_name FROM ctree
 WHERE func_addr = 0x401000
   AND op_name = 'cot_call'
   AND depth > 3;
@@ -58,7 +58,7 @@ WHERE dc.func_addr = 0x401000;
 
 -- Step 2: For each callee, examine what offsets it accesses
 -- This reveals fields the current function doesn't use
-SELECT (SELECT name FROM funcs WHERE func_addr >= address AND func_addr < end_ea LIMIT 1) as func, num_value as offset
+SELECT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) as func, num_value as offset
 FROM ctree
 WHERE func_addr IN (0x401050, 0x401080, 0x4010B0)
   AND op_name = 'cot_add'
@@ -76,16 +76,18 @@ When a function switches on a field value, the cases often map to enum values:
 
 ```sql
 -- Find switch-like comparisons in the function
-SELECT ea, op_name, num_value
+SELECT addr, op_name, num_value
 FROM ctree WHERE func_addr = 0x401000
   AND op_name IN ('cot_eq', 'cot_ne')
   AND num_value IS NOT NULL
 ORDER BY num_value;
 
--- Create the enum from discovered values
+-- Create the enum from discovered values; derive its ordinal from the name.
 INSERT INTO types (name, kind) VALUES ('MY_CMD_TYPE', 'enum');
--- Get ordinal, then add values:
-INSERT INTO types_enum_values (type_ordinal, value_name, value) VALUES (50, 'CMD_INIT', 0);
-INSERT INTO types_enum_values (type_ordinal, value_name, value) VALUES (50, 'CMD_READ', 1);
-INSERT INTO types_enum_values (type_ordinal, value_name, value) VALUES (50, 'CMD_WRITE', 2);
+INSERT INTO types_enum_values (type_ordinal, value_name, value)
+SELECT ordinal, 'CMD_INIT', 0 FROM types WHERE name = 'MY_CMD_TYPE';
+INSERT INTO types_enum_values (type_ordinal, value_name, value)
+SELECT ordinal, 'CMD_READ', 1 FROM types WHERE name = 'MY_CMD_TYPE';
+INSERT INTO types_enum_values (type_ordinal, value_name, value)
+SELECT ordinal, 'CMD_WRITE', 2 FROM types WHERE name = 'MY_CMD_TYPE';
 ```

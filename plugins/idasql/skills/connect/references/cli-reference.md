@@ -15,7 +15,7 @@ When validating behavior that must match the live IDA plugin session, use SDK-pa
 - CLI: `%IDASDK%\src\bin\idasql.exe`
 - Plugin loaded by IDA: `%IDASDK%\src\bin\plugins\idasql.dll`
 
-Do not use test harness binaries (for example `build/idasql_tests/.../idasql.exe`) to conclude plugin behavior. Those are useful for tests, but plugin-parity checks must run against the SDK-path artifacts.
+Do not infer plugin behavior from a separately-built test-harness binary; plugin-parity checks must run against the SDK-path artifacts above (`%IDASDK%\src\bin\idasql.exe` and the IDA-loaded `plugins\idasql.dll`).
 
 ### Invocation Modes
 
@@ -27,7 +27,7 @@ first open. No `idat -A -B` / `ida -B` pre-step is needed.
 
 ```bash
 idasql -s sample.exe --http 8080
-idasql -s sample.dll -q "SELECT * FROM welcome"
+idasql -s sample.dll -q "SELECT * FROM binary"
 idasql -s firmware.bin -i
 ```
 
@@ -49,8 +49,7 @@ the process exits before binding a port.
 **1. Query or Script (Local)**
 ```bash
 idasql -s database.i64 -q "SELECT * FROM funcs LIMIT 10"
-idasql -s database.i64 -q "SELECT * FROM welcome; SELECT COUNT(*) FROM funcs;"
-idasql -s database.i64 -c "SELECT COUNT(*) FROM funcs"  # -c is alias for -q
+idasql -s database.i64 -q "SELECT * FROM binary; SELECT COUNT(*) FROM funcs;"
 ```
 
 **2. SQL File Execution**
@@ -82,7 +81,7 @@ idasql -s database.i64 --export dump.sql --export-tables=funcs,segments
 | Option | Description |
 |--------|-------------|
 | `-s <file>` | IDA database (`.idb`/`.i64`) **or** raw binary (`.exe`/`.dll`/firmware/etc.) — raw binaries trigger fresh idalib analysis and string-list rebuild; legacy 32-bit `.idb` may return `status:"upgraded"` with `reopen_with` |
-| `--token <token>` | Auth token for HTTP/MCP server mode |
+| `--token <token>` | Auth token for HTTP server mode (HTTP only; MCP has no auth) |
 | `-q <sql>` | Execute SQL query or semicolon-separated script |
 | `-f <file>` | Execute SQL from file |
 | `-i` | Interactive REPL mode |
@@ -92,9 +91,8 @@ idasql -s database.i64 --export dump.sql --export-tables=funcs,segments
 | `--http [port]` | Start HTTP REST server (default: 8080, local mode only) |
 | `--bind <addr>` | Bind address for HTTP/MCP server (default: 127.0.0.1) |
 | `--mcp [port]` | Start MCP server (default: random port, use in -i mode) |
-| `--agent` | Enable AI agent mode in interactive REPL |
-| `--config [path] [value]` | View/set agent configuration |
 | `-h, --help` | Show help |
+| `--version` | Show version |
 
 ### REPL Commands
 
@@ -108,10 +106,12 @@ idasql -s database.i64 --export dump.sql --export-tables=funcs,segments
 | `.http start` | Start HTTP server (reuses a pinned port when no port is given) |
 | `.http stop` | Stop HTTP server |
 | `.http` | Show HTTP server status (start if not running) |
-| `.pin` / `.pin list` | Show pinned autostart config |
-| `.pin set http\|mcp [bind] <port>` | Pin a server's host/port (port required); enables autostart |
+| `.pin` / `.pin list` / `.pin status` | Show pinned autostart config |
+| `.pin http\|mcp [bindinterface] [port]` | Pin a server; enables autostart. **Omit the port for a fresh random port each launch.** |
+| `.pin set http\|mcp [bindinterface] [port]` | Same, explicit form |
 | `.pin on\|off http\|mcp` | Enable/disable autostart-on-load (keeps host/port) |
 | `.pin clear [http\|mcp\|all]` | Remove pinned config (default `all`) |
+| `.pin help` | Show pin help |
 
 > **Autostart pins.** A pin is stored in the IDB (netnode `$ idasql config`).
 > The `.pin` command works in both the CLI and the plugin — but **only the IDA
@@ -119,6 +119,23 @@ idasql -s database.i64 --export dump.sql --export-tables=funcs,segments
 > / `.mcp start` with no explicit port reuse the pinned host/port. From the CLI,
 > `.pin` changes persist only when idasql is started with `-w/--write` (same as
 > any other IDB edit).
+>
+> **Optional port (fixed vs random).** `[bindinterface]` is the host/interface
+> (default `127.0.0.1`). The port is **optional**:
+> - **Fixed port** — `.pin http 0.0.0.0 8080` pins a stable port; the plugin
+>   autostarts on it every launch (good for stable automation).
+> - **Random port** — `.pin http` (port omitted, stored as `0`) pins autostart
+>   with a **fresh random port each launch**. This is a real pinned setting, not
+>   "unset" — discover the chosen port from the live status. `.pin status` shows
+>   `<random port each launch>` for such a pin.
+>
+> ```text
+> .pin http                 # autostart HTTP on a random port each launch
+> .pin mcp 127.0.0.1 8081   # autostart MCP on a fixed port
+> .pin status               # http -> 127.0.0.1:<random port each launch> (autostart on)
+> .pin off http             # keep the pin but stop autostarting
+> .pin clear all            # remove all pins
+> ```
 
 ### Performance Strategy
 
@@ -127,7 +144,7 @@ Opening a database has startup overhead (IDALib initialization and auto-analysis
 **One-shot query/script:** Use `-q` directly.
 ```bash
 idasql -s database.i64 -q "SELECT COUNT(*) FROM funcs"
-idasql -s database.i64 -q "SELECT * FROM welcome; SELECT COUNT(*) FROM funcs;"
+idasql -s database.i64 -q "SELECT * FROM binary; SELECT COUNT(*) FROM funcs;"
 ```
 
 **Iterative exploration:** Start a server once, then query repeatedly over HTTP. Each HTTP `/query` body may also be a semicolon-separated script; every response uses the canonical `results[]` envelope (a single statement is an array of one).
@@ -162,9 +179,18 @@ PRAGMA idasql.queue_admission_timeout_ms = 120000;
 PRAGMA idasql.max_queue = 64;                    -- 0 = unbounded
 PRAGMA idasql.hints_enabled = 1;                 -- 1/0, on/off
 PRAGMA idasql.enable_idapython = 1;              -- 1/0, enable SQL Python execution
-PRAGMA idasql.timeout_push = 15000;              -- push old timeout, set new
+PRAGMA idasql.idapython_output_max = 0;          -- cap captured Python print output in bytes (0 = unbounded)
+PRAGMA idasql.timeout_push = 15000;              -- push old timeout, set new (stack bounded to 64)
 PRAGMA idasql.timeout_pop;                       -- restore previous timeout
 ```
+
+The `timeout_push` stack is bounded to **64** entries; the 65th push is rejected
+(guards against unbounded client-driven growth). Pair each push with a `timeout_pop`.
+
+To enumerate the current settings, `SELECT * FROM runtime_settings` — a read-only
+discovery view over these pragmas that returns one `key`/`value`/`type`/`scope` row
+per setting (values track `PRAGMA idasql.*` writes). It is read-only; change a
+setting with `PRAGMA idasql.<key> = <value>`, not an UPDATE.
 
 Recommended defaults for agent harnesses that issue concurrent requests:
 
@@ -191,7 +217,7 @@ Quick capability matrix:
 | `names` | Yes | `name`, `folder_path` | Yes |
 | `comments` | Yes | `comment`, `rpt_comment` | Yes |
 | `bookmarks` | Yes | `description`, `folder_path` | Yes |
-| `segments` | Yes | `name`, `class`, `perm` | Yes |
+| `segments` | Yes | `start_addr` (rebase), `end_addr` (resize), `name`, `class`, `perm` | Yes |
 | `instructions` | — | `operand0_format_spec` .. `operand7_format_spec` | Yes |
 | `bytes` | — | `value`, `word`, `dword`, `qword` | Yes (revert patch) |
 | `types` | Yes | `name`, `folder_path`, plus type-table write columns | Yes |
@@ -211,20 +237,20 @@ Instruction creation uses SQL functions rather than `INSERT`:
 - `make_code_range(start, end)`
 
 Function creation uses table INSERT (calls `add_func()`):
-- `INSERT INTO funcs(address) VALUES (...)`
+- `INSERT INTO funcs(addr) VALUES (...)`
 
 Folder organization uses object-table `folder_path` columns and `dirtree_folders`:
 
 ```sql
 INSERT INTO dirtree_folders(tree, path) VALUES ('funcs', 'idasql/folder-lifecycle-demo');
-UPDATE funcs SET folder_path = 'idasql/folder-lifecycle-demo' WHERE address = 0x401000;
-UPDATE names SET folder_path = 'idasql/names/globals' WHERE address = 0x402000;
+UPDATE funcs SET folder_path = 'idasql/folder-lifecycle-demo' WHERE addr = 0x401000;
+UPDATE names SET folder_path = 'idasql/names/globals' WHERE addr = 0x402000;
 UPDATE imports SET folder_path = 'idasql/imports/network' WHERE name LIKE '%socket%';
 UPDATE bookmarks SET folder_path = 'idasql/bookmarks/review' WHERE slot = 0;
-UPDATE breakpoints SET folder_path = 'idasql/breakpoints/watch' WHERE address = 0x401000;
+UPDATE breakpoints SET folder_path = 'idasql/breakpoints/watch' WHERE addr = 0x401000;
 UPDATE dirtree_folders SET path = 'idasql/folder-lifecycle-renamed'
 WHERE tree = 'funcs' AND path = 'idasql/folder-lifecycle-demo';
-UPDATE funcs SET folder_path = NULL WHERE address = 0x401000;
+UPDATE funcs SET folder_path = NULL WHERE addr = 0x401000;
 DELETE FROM dirtree_folders WHERE tree = 'funcs' AND path = 'idasql/folder-lifecycle-renamed';
 ```
 
@@ -234,7 +260,7 @@ Folder writes use relative `/` paths. `NULL` or `''` moves object-table folder c
 Recursive folder delete and raw recovery/link operations are not exposed through SQL.
 
 Bulk byte loading from external files uses:
-- `SELECT load_file_bytes(path, file_offset, address, size[, patchable])`
+- `SELECT load_file_bytes(path, file_offset, addr, size[, patchable])`
 
 ---
 
@@ -244,13 +270,13 @@ IDA uses integer addresses. For display, use `printf()`:
 
 ```sql
 -- 32-bit format
-SELECT printf('0x%08X', address) as addr FROM funcs;
+SELECT printf('0x%08X', addr) as addr FROM funcs;
 
 -- 64-bit format
-SELECT printf('0x%016llX', address) as addr FROM funcs;
+SELECT printf('0x%016llX', addr) as addr FROM funcs;
 
 -- Auto-width
-SELECT printf('0x%X', address) as addr FROM funcs;
+SELECT printf('0x%X', addr) as addr FROM funcs;
 ```
 
 ---

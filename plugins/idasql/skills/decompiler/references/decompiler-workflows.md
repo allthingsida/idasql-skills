@@ -12,8 +12,8 @@ SELECT decompile(0x401000);
 
 2. Baseline mutation surfaces (must exist in all supported plugin runtimes):
 ```sql
--- INSERT acts as upsert at the EA; UPDATE names SET name = ... WHERE address = ... is equivalent.
-INSERT INTO names(address, name) VALUES (0x401000, 'my_func');
+-- INSERT acts as upsert at the EA; UPDATE names SET name = ... WHERE addr = ... is equivalent.
+INSERT INTO names(addr, name) VALUES (0x401000, 'my_func');
 UPDATE ctree_lvars SET name = 'arg0' WHERE func_addr = 0x401000 AND idx = 0;
 UPDATE ctree_lvars SET comment = 'seed comment' WHERE func_addr = 0x401000 AND idx = 0;
 ```
@@ -22,8 +22,8 @@ UPDATE ctree_lvars SET comment = 'seed comment' WHERE func_addr = 0x401000 AND i
 ```sql
 SELECT call_arg_item(0x401000, 0x401020, 0);
 SELECT ctree_item_at(0x401000, 0x401030, 'cot_asg', 0);
-SELECT set_union_selection_ea_expr(0x401000, 0x401030, '', 'cot_asg', 0);
-SELECT set_numform_ea_expr(0x401000, 0x401030, 0, 'clear', 'cot_asg', 0);
+SELECT set_union_selection_addr_expr(0x401000, 0x401030, '', 'cot_asg', 0);
+SELECT set_numform_addr_expr(0x401000, 0x401030, 0, 'clear', 'cot_asg', 0);
 ```
 
 If any call returns `no such function`, treat that primitive as unavailable in this runtime and switch to fallback workflows below.
@@ -46,18 +46,18 @@ Use call-site typing when a specific indirect call still decompiles poorly after
 
 ```sql
 -- 1. Find candidate indirect calls
-SELECT call_ea, target_op, target_var_name, arg_count
+SELECT call_addr, target_op, target_var_name, arg_count
 FROM ctree_v_indirect_calls
 WHERE func_addr = 0x140001BD0
-ORDER BY call_ea;
+ORDER BY call_addr;
 
 -- 2. Apply an explicit prototype at one call site
 UPDATE disasm_calls
 SET callee_type = 'int __fastcall emit_message(const char *name, const char *target, int flag, const char *tag);'
-WHERE ea = 0x140001C3E;
+WHERE addr = 0x140001C3E;
 
 -- 3. Verify persisted call metadata
-SELECT callee_type FROM disasm_calls WHERE ea = 0x140001C3E;
+SELECT callee_type FROM disasm_calls WHERE addr = 0x140001C3E;
 SELECT call_arg_addrs(0x140001C3E);
 
 -- 4. Refresh once after semantic typing
@@ -71,11 +71,15 @@ SELECT decompile(0x140001BD0, 1);
 When advanced numform/union helpers are unavailable, aggressively improve pseudocode via local type seeding:
 
 ```sql
--- Change local/arg type and optional comment
+-- Change local/arg type and optional comment (scalars, pointers, and arrays)
 UPDATE ctree_lvars
 SET type = 'unsigned __int64',
     comment = 'my comment here'
 WHERE func_addr = 0x401000 AND idx = 18;
+
+-- Array types apply too, e.g. a wide "POST" stack string
+UPDATE ctree_lvars SET type = 'WCHAR[6]'
+WHERE func_addr = 0x401000 AND idx = 17;
 
 -- Refresh and verify effect in pseudocode
 SELECT decompile(0x401000, 1);
@@ -168,20 +172,20 @@ typedef struct command_t { operations_e cmd_id; union { open_t open; read_t read
 UPDATE funcs
 SET name = 'exec_command',
     prototype = 'void __fastcall exec_command(command_t *cmd);'
-WHERE address = 0x140001BD0;
+WHERE addr = 0x140001BD0;
 SELECT decompile(0x140001BD0, 1);
 
 -- Hybrid call-arg targeting (recommended): line 0x140001C3E has multiple casted args.
 -- Callee is optional. If used, pass exact name from ctree_call_args
 -- (for imports this is commonly "__imp_fread", not "fread").
-SELECT set_union_selection_ea_arg(0x140001BD0, 0x140001C3E, 0, '[1]');
-SELECT get_union_selection_ea_arg(0x140001BD0, 0x140001C3E, 0);
+SELECT set_union_selection_addr_arg(0x140001BD0, 0x140001C3E, 0, '[1]');
+SELECT get_union_selection_addr_arg(0x140001BD0, 0x140001C3E, 0);
 
 -- If helper returns ambiguity/no-match, resolve explicitly:
-SELECT call_item_id, arg_idx, arg_item_id, call_ea AS ea,
+SELECT call_item_id, arg_idx, arg_item_id, call_addr AS addr,
        COALESCE(NULLIF(call_obj_name,''), call_helper_name, '') AS callee
 FROM ctree_call_args
-WHERE func_addr = 0x140001BD0 AND call_ea = 0x140001C3E AND arg_idx = 0
+WHERE func_addr = 0x140001BD0 AND call_addr = 0x140001C3E AND arg_idx = 0
 ORDER BY call_item_id, arg_idx;
 
 -- Fallback with explicit item id:
@@ -199,20 +203,20 @@ SELECT call_arg_item(0x140001BD0, 0x140001C3E, 0);
 -- Assignment-side stores often need generic expression targeting.
 -- This is the right fix when a wrong union arm creates casts or temp locals.
 SELECT ctree_item_at(0x140001BD0, 0x140001C49, 'cot_asg', 0);
-SELECT set_union_selection_ea_expr(0x140001BD0, 0x140001C49, '[0]', 'cot_asg', 0);
-SELECT set_numform_ea_expr(0x140001BD0, 0x140001C49, 0, 'clear', 'cot_asg', 0);
+SELECT set_union_selection_addr_expr(0x140001BD0, 0x140001C49, '[0]', 'cot_asg', 0);
+SELECT set_numform_addr_expr(0x140001BD0, 0x140001C49, 0, 'clear', 'cot_asg', 0);
 
 -- Non-call expression workflow (e.g., comparisons/ifs):
--- 1) resolve expression item deterministically by ea + op_name + nth
+-- 1) resolve expression item deterministically by addr + op_name + nth
 SELECT ctree_item_at(0x140001BD0, 0x140001CBB, 'cot_eq', 0);
 -- 2) apply/read via generic expression helpers
-SELECT set_numform_ea_expr(0x140001BD0, 0x140001CBB, 0, 'enum:operations_e', 'cot_eq', 0);
-SELECT get_numform_ea_expr(0x140001BD0, 0x140001CBB, 0, 'cot_eq', 0);
-SELECT set_numform_ea_expr(0x140001BD0, 0x140001CBB, 0, 'clear', 'cot_eq', 0);
+SELECT set_numform_addr_expr(0x140001BD0, 0x140001CBB, 0, 'enum:operations_e', 'cot_eq', 0);
+SELECT get_numform_addr_expr(0x140001BD0, 0x140001CBB, 0, 'cot_eq', 0);
+SELECT set_numform_addr_expr(0x140001BD0, 0x140001CBB, 0, 'clear', 'cot_eq', 0);
 
 -- Assignment-style expression (not a call): target with cot_asg
 SELECT ctree_item_at(0x140001BD0, 0x140001C49, 'cot_asg', 0);
-SELECT set_union_selection_ea_expr(0x140001BD0, 0x140001C49, '', 'cot_asg', 0);
+SELECT set_union_selection_addr_expr(0x140001BD0, 0x140001C49, '', 'cot_asg', 0);
 ```
 
 Decompiler local and label mutation is table-driven:
@@ -244,13 +248,13 @@ SELECT save_database();
 
 **CLI flag for save-on-exit:**
 ```bash
-idasql -s db.i64 -q "UPDATE funcs SET name='main' WHERE address=0x401000" -w
+idasql -s db.i64 -q "UPDATE funcs SET name='main' WHERE addr=0x401000" -w
 ```
 
 **Best practice for batch operations:**
 ```sql
-UPDATE funcs SET name = 'init_config' WHERE address = 0x401000;
-UPDATE names SET name = 'g_settings' WHERE address = 0x402000;
+UPDATE funcs SET name = 'init_config' WHERE addr = 0x401000;
+UPDATE names SET name = 'g_settings' WHERE addr = 0x402000;
 SELECT save_database();
 ```
 

@@ -29,20 +29,20 @@ Route to:
 
 ```sql
 -- 1) Current breakpoint inventory
-SELECT printf('0x%X', address) AS addr, type_name, enabled
+SELECT printf('0x%X', addr) AS addr, type_name, enabled
 FROM breakpoints
-ORDER BY address;
+ORDER BY addr;
 
 -- 2) Current patch inventory (fast: backed by IDA's patch list)
-SELECT printf('0x%X', ea) AS ea, original_value, value AS patched_value
+SELECT printf('0x%X', addr) AS addr, original_value, value AS patched_value
 FROM bytes WHERE is_patched = 1
-ORDER BY ea
+ORDER BY addr
 LIMIT 50;
 
 -- 3) Validate target bytes before patch
-SELECT ea, value, original_value, is_patched
+SELECT addr, value, original_value, is_patched
 FROM bytes
-WHERE ea = 0x401000;
+WHERE addr = 0x401000;
 ```
 
 Interpretation guidance:
@@ -58,7 +58,7 @@ Interpretation guidance:
 - Patch verification mismatch:
   - Re-read `bytes` (and `WHERE is_patched = 1`), then retry with precise address.
 - Unintended patch side effects:
-  - Revert with `DELETE FROM bytes WHERE ea = ...` and reassess target instruction context.
+  - Revert with `DELETE FROM bytes WHERE addr = ...` and reassess target instruction context.
 
 ---
 
@@ -76,9 +76,9 @@ Debugger breakpoints. Supports full CRUD (SELECT, INSERT, UPDATE, DELETE). Break
 
 | Column | Type | RW | Description |
 |--------|------|----|-------------|
-| `address` | INT | R | Breakpoint address |
+| `addr` | INT | R | Breakpoint address |
 | `enabled` | INT | RW | 1=enabled, 0=disabled |
-| `type` | INT | RW | Breakpoint type (0=software, 1=hw_write, 2=hw_read, 3=hw_rdwr, 4=hw_exec) |
+| `type` | INT | RW | Breakpoint type (1=hw_write, 2=hw_read, 3=hw_rdwr, 4=software, 8=hw_exec) |
 | `type_name` | TEXT | R | Type name (software, hardware_write, etc.) |
 | `size` | INT | RW | Breakpoint size (for hardware breakpoints) |
 | `flags` | INT | RW | Breakpoint flags |
@@ -100,32 +100,32 @@ Debugger breakpoints. Supports full CRUD (SELECT, INSERT, UPDATE, DELETE). Break
 
 ```sql
 -- List all breakpoints
-SELECT printf('0x%08X', address) as addr, type_name, enabled, condition
+SELECT printf('0x%08X', addr) as addr, type_name, enabled, condition
 FROM breakpoints;
 
 -- Add software breakpoint
-INSERT INTO breakpoints (address) VALUES (0x401000);
+INSERT INTO breakpoints (addr) VALUES (0x401000);
 
 -- Add hardware write watchpoint
-INSERT INTO breakpoints (address, type, size) VALUES (0x402000, 1, 4);
+INSERT INTO breakpoints (addr, type, size) VALUES (0x402000, 1, 4);
 
--- Add conditional breakpoint
-INSERT INTO breakpoints (address, condition) VALUES (0x401000, 'eax == 0');
+-- Add conditional breakpoint (at a different address than the plain one above)
+INSERT INTO breakpoints (addr, condition) VALUES (0x401330, 'eax == 0');
 
 -- Move breakpoint into/out of an IDA breakpoint folder
-UPDATE breakpoints SET folder_path = 'idasql/breakpoints/network' WHERE address = 0x401000;
-UPDATE breakpoints SET folder_path = NULL WHERE address = 0x401000;
+UPDATE breakpoints SET folder_path = 'idasql/breakpoints/network' WHERE addr = 0x401000;
+UPDATE breakpoints SET folder_path = NULL WHERE addr = 0x401000;
 
 -- Disable a breakpoint
-UPDATE breakpoints SET enabled = 0 WHERE address = 0x401000;
+UPDATE breakpoints SET enabled = 0 WHERE addr = 0x401000;
 
 -- Delete a breakpoint
-DELETE FROM breakpoints WHERE address = 0x401000;
+DELETE FROM breakpoints WHERE addr = 0x401000;
 
 -- Find which functions have breakpoints
-SELECT b.address, f.name, b.type_name, b.enabled
+SELECT b.addr, f.name, b.type_name, b.enabled
 FROM breakpoints b
-JOIN funcs f ON b.address >= f.address AND b.address < f.end_ea;
+JOIN funcs f ON b.addr >= f.addr AND b.addr < f.end_addr;
 ```
 
 ---
@@ -137,7 +137,7 @@ mapped byte address; IDA item metadata such as size/type belongs to `heads`.
 
 | Column | Type | RW | Description |
 |--------|------|----|-------------|
-| `ea` | INT | R | Byte address |
+| `addr` | INT | R | Byte address |
 | `value` | INT | RW | Current byte value (UPDATE patches 1 byte) |
 | `word` | INT | RW | 2-byte little-endian value (UPDATE patches 2 bytes) |
 | `dword` | INT | RW | 4-byte little-endian value (UPDATE patches 4 bytes) |
@@ -146,31 +146,31 @@ mapped byte address; IDA item metadata such as size/type belongs to `heads`.
 | `is_patched` | INT | R | 1 if byte differs from original (`WHERE is_patched = 1` enumerates patches fast) |
 | `fpos` | INT | R | Physical/input file offset (NULL when unavailable) |
 
-Revert a patch with `DELETE FROM bytes WHERE ea = ...` (or `WHERE is_patched = 1`).
+Revert a patch with `DELETE FROM bytes WHERE addr = ...` (or `WHERE is_patched = 1`).
 
 ```sql
 -- Read one address
-SELECT ea, value, original_value, is_patched
-FROM bytes WHERE ea = 0x401000;
+SELECT addr, value, original_value, is_patched
+FROM bytes WHERE addr = 0x401000;
 
 -- Read a byte range, including item-tail bytes
-SELECT ea, value
+SELECT addr, value
 FROM bytes
-WHERE ea >= 0x401000 AND ea < 0x401010
-ORDER BY ea;
+WHERE addr >= 0x401000 AND addr < 0x401010
+ORDER BY addr;
 
 -- Get item metadata separately
-SELECT address, size, type, flags, disasm
+SELECT addr, size, type, flags, disasm
 FROM heads
-WHERE address = 0x401000;
+WHERE addr = 0x401000;
 
 -- Patch via table update (single byte, or width columns word/dword/qword)
-UPDATE bytes SET value = 0x90 WHERE ea = 0x401000;
-UPDATE bytes SET dword = 0x90909090 WHERE ea = 0x401000;  -- little-endian
+UPDATE bytes SET value = 0x90 WHERE addr = 0x401000;
+UPDATE bytes SET dword = 0x90909090 WHERE addr = 0x401000;  -- little-endian
 
 -- Inspect patch inventory (fast: backed by IDA's patch list)
-SELECT printf('0x%X', ea) AS ea, original_value, value AS patched_value
-FROM bytes WHERE is_patched = 1 ORDER BY ea LIMIT 20;
+SELECT printf('0x%X', addr) AS addr, original_value, value AS patched_value
+FROM bytes WHERE is_patched = 1 ORDER BY addr LIMIT 20;
 
 -- Persist once done
 SELECT save_database();
@@ -190,11 +190,11 @@ All byte patching is done through the writable `bytes` table.
 | `is_patched` | R | 1 if patched; `WHERE is_patched = 1` enumerates patches fast |
 
 ```sql
-SELECT printf('0x%X', ea) AS ea,
+SELECT printf('0x%X', addr) AS addr,
        printf('0x%02X', original_value) AS old,
        printf('0x%02X', value) AS new
 FROM bytes WHERE is_patched = 1
-ORDER BY ea;
+ORDER BY addr;
 ```
 
 ---
@@ -208,25 +208,25 @@ a given range; use it when the patch content already lives in a file.
 
 | Function / Shape | Description |
 |------------------|-------------|
-| `SELECT hex(blob_concat(value)) FROM (SELECT value FROM bytes WHERE start_ea = X AND n = N ORDER BY ea)` | Read N bytes as uppercase hex |
-| `SELECT blob_concat(value) FROM (SELECT value FROM bytes WHERE start_ea = X AND n = N ORDER BY ea)` | Read N bytes as BLOB |
-| `load_file_bytes(path, file_offset, address, size[, patchable])` | Write a file's bytes into the IDB at the target range |
+| `SELECT hex(blob_concat(value)) FROM (SELECT value FROM bytes WHERE start_addr = X AND n = N ORDER BY addr)` | Read N bytes as uppercase hex |
+| `SELECT blob_concat(value) FROM (SELECT value FROM bytes WHERE start_addr = X AND n = N ORDER BY addr)` | Read N bytes as BLOB |
+| `load_file_bytes(path, file_offset, addr, size[, patchable])` | Write a file's bytes into the IDB at the target range |
 
 ```sql
 -- Read 16 bytes as hex
 SELECT hex(blob_concat(value))
-FROM (SELECT value FROM bytes WHERE start_ea = 0x401000 AND n = 16 ORDER BY ea);
+FROM (SELECT value FROM bytes WHERE start_addr = 0x401000 AND n = 16 ORDER BY addr);
 
 -- Patch one byte (example: NOP) and a 4-byte little-endian value
-UPDATE bytes SET value = 0x90 WHERE ea = 0x401000;
-UPDATE bytes SET dword = 0x90909090 WHERE ea = 0x401000;
+UPDATE bytes SET value = 0x90 WHERE addr = 0x401000;
+UPDATE bytes SET dword = 0x90909090 WHERE addr = 0x401000;
 
 -- Verify current vs original
 SELECT value AS current, original_value AS original
-FROM bytes WHERE ea = 0x401000;
+FROM bytes WHERE addr = 0x401000;
 
 -- Revert patch (one byte, or every patch)
-DELETE FROM bytes WHERE ea = 0x401000;
+DELETE FROM bytes WHERE addr = 0x401000;
 DELETE FROM bytes WHERE is_patched = 1;
 
 -- Persist patches explicitly
@@ -243,11 +243,11 @@ Use disasm_calls to find every call site and batch-insert breakpoints:
 
 ```sql
 -- Breakpoint on every call to VirtualAlloc (or similar)
-INSERT INTO breakpoints (address)
-SELECT ea FROM disasm_calls WHERE callee_name LIKE '%VirtualAlloc%';
+INSERT INTO breakpoints (addr)
+SELECT addr FROM disasm_calls WHERE callee_name LIKE '%VirtualAlloc%';
 
 -- Verify
-SELECT printf('0x%08X', address) AS addr, type_name, enabled
+SELECT printf('0x%08X', addr) AS addr, type_name, enabled
 FROM breakpoints;
 ```
 
@@ -258,7 +258,7 @@ After recovering a struct, set hardware watchpoints on specific field offsets:
 ```sql
 -- Hardware write watchpoint on a 4-byte field (e.g., config.flags at base+0x10)
 -- First, find where the struct base is stored (requires manual analysis)
-INSERT INTO breakpoints (address, type, size) VALUES (0x402010, 1, 4);
+INSERT INTO breakpoints (addr, type, size) VALUES (0x402010, 1, 4);
 -- type=1 is hardware_write, size=4 for DWORD field
 ```
 
@@ -268,11 +268,11 @@ Set breakpoints that only trigger when specific conditions are met:
 
 ```sql
 -- Break when first argument (rcx on x64 fastcall) equals a specific enum value
-INSERT INTO breakpoints (address, condition)
+INSERT INTO breakpoints (addr, condition)
 VALUES (0x401000, 'rcx == 3');
 
 -- Break on error return
-INSERT INTO breakpoints (address, condition)
+INSERT INTO breakpoints (addr, condition)
 VALUES (0x401050, 'rax == 0xFFFFFFFF');
 ```
 
@@ -286,8 +286,8 @@ Find and neutralize `IsDebuggerPresent` checks:
 
 ```sql
 -- Find calls to IsDebuggerPresent
-SELECT dc.ea, (SELECT name FROM funcs WHERE dc.func_addr >= address AND dc.func_addr < end_ea LIMIT 1) AS func_name,
-       disasm_at(dc.ea, 2) AS context
+SELECT dc.addr, (SELECT name FROM funcs WHERE dc.func_addr >= addr AND dc.func_addr < end_addr LIMIT 1) AS func_name,
+       disasm_at(dc.addr, 2) AS context
 FROM disasm_calls dc
 WHERE dc.callee_name LIKE '%IsDebuggerPresent%';
 
@@ -295,21 +295,21 @@ WHERE dc.callee_name LIKE '%IsDebuggerPresent%';
 -- First inspect the instruction after the call
 SELECT disasm_at(0x401030, 3);
 -- Then patch (adjust addresses based on actual binary)
-UPDATE bytes SET value = 0x90 WHERE ea = 0x401035;
-UPDATE bytes SET value = 0x90 WHERE ea = 0x401036;
+UPDATE bytes SET value = 0x90 WHERE addr = 0x401035;
+UPDATE bytes SET value = 0x90 WHERE addr = 0x401036;
 ```
 
 ### Inventory all patches and generate report
 
 ```sql
 -- Full patch report: what was changed and where
-SELECT printf('0x%X', ea) AS address,
-       (SELECT name FROM funcs WHERE ea >= address AND ea < end_ea LIMIT 1) AS func_name,
+SELECT printf('0x%X', addr) AS addr,
+       (SELECT name FROM funcs WHERE addr >= addr AND addr < end_addr LIMIT 1) AS func_name,
        printf('0x%02X', original_value) AS original,
        printf('0x%02X', value) AS patched,
-       disasm_at(ea) AS context
+       disasm_at(addr) AS context
 FROM bytes WHERE is_patched = 1
-ORDER BY ea;
+ORDER BY addr;
 ```
 
 ---
@@ -319,11 +319,11 @@ ORDER BY ea;
 | Table | Size | Constraint | Notes |
 |-------|------|-----------|-------|
 | `breakpoints` | Small (<100 typical) | none needed | Always fast |
-| `bytes` | All mapped bytes | `ea` | **Critical** — constrain to one address or a tight range |
+| `bytes` | All mapped bytes | `addr` | **Critical** — constrain to one address or a tight range |
 | `bytes WHERE is_patched = 1` | Small (patch count) | `is_patched = 1` | Fast — iterates only patched locations via IDA's patch list |
 
 - `breakpoints` table is small — full scans are fine.
-- `bytes` table emits one row per mapped byte. Use `WHERE ea = X` or a tight `ea` range.
+- `bytes` table emits one row per mapped byte. Use `WHERE addr = X` or a tight `addr` range.
 - `bytes WHERE is_patched = 1` iterates only patched locations — always fast.
 
 ---

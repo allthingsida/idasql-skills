@@ -31,7 +31,7 @@ Route to:
 SELECT COUNT(*) AS strings FROM strings;
 
 -- 2) Sample high-value strings
-SELECT content, printf('0x%X', address) AS addr
+SELECT content, printf('0x%X', addr) AS addr
 FROM strings
 WHERE length >= 8
 ORDER BY length DESC
@@ -73,7 +73,7 @@ String literals found in the binary. IDA maintains a cached string list that can
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `address` | INT | String address |
+| `addr` | INT | String address |
 | `length` | INT | String length |
 | `type` | INT | String type (raw encoding bits) |
 | `type_name` | TEXT | Type name: ascii, utf16, utf32 |
@@ -94,7 +94,7 @@ IDA stores string type as a 32-bit value:
 
 ```sql
 -- Find error messages
-SELECT content, printf('0x%X', address) as addr FROM strings WHERE content LIKE '%error%';
+SELECT content, printf('0x%X', addr) as addr FROM strings WHERE content LIKE '%error%';
 
 -- ASCII strings only
 SELECT * FROM strings WHERE type_name = 'ascii';
@@ -119,19 +119,19 @@ Use `strings + xrefs + funcs` directly. This is the canonical pattern.
 -- Find call sites/functions referencing error-like strings
 SELECT
     s.content as string_value,
-    printf('0x%X', x.from_ea) as ref_addr,
-    (SELECT name FROM funcs WHERE x.from_ea >= address AND x.from_ea < end_ea LIMIT 1) as func_name
+    printf('0x%X', x.from_addr) as ref_addr,
+    (SELECT name FROM funcs WHERE x.from_addr >= addr AND x.from_addr < end_addr LIMIT 1) as func_name
 FROM strings s
-JOIN xrefs x ON x.to_ea = s.address
+JOIN xrefs x ON x.to_addr = s.addr
 WHERE s.content LIKE '%error%' OR s.content LIKE '%fail%'
 ORDER BY func_name, ref_addr;
 
 -- Functions with most string references
 SELECT
-    (SELECT name FROM funcs WHERE x.from_ea >= address AND x.from_ea < end_ea LIMIT 1) as func_name,
+    (SELECT name FROM funcs WHERE x.from_addr >= addr AND x.from_addr < end_addr LIMIT 1) as func_name,
     COUNT(*) as string_refs
 FROM strings s
-JOIN xrefs x ON x.to_ea = s.address
+JOIN xrefs x ON x.to_addr = s.addr
 GROUP BY func_name
 ORDER BY string_refs DESC
 LIMIT 10;
@@ -141,34 +141,34 @@ LIMIT 10;
 
 ## `bytes` Table — Reads, Patches, and Bounded Windows
 
-**All byte access goes through the `bytes` table.** The hidden `start_ea` and
+**All byte access goes through the `bytes` table.** The hidden `start_addr` and
 `n` input columns pair up for bounded reads; bulk hex uses
 `hex(blob_concat(value))`, bulk BLOB uses `blob_concat(value)`.
 
 | Shape | SQL |
 |-------|-----|
-| Read 1 byte | `SELECT value FROM bytes WHERE ea = 0x401000` |
-| Read N bytes as hex (uppercase, no spaces) | `SELECT hex(blob_concat(value)) FROM (SELECT value FROM bytes WHERE start_ea = 0x401000 AND n = 16 ORDER BY ea)` |
-| Read N bytes as BLOB | `SELECT blob_concat(value) FROM (SELECT value FROM bytes WHERE start_ea = 0x401000 AND n = 16 ORDER BY ea)` |
-| Read a range | `SELECT value FROM bytes WHERE ea >= 0x401000 AND ea < 0x401010 ORDER BY ea` |
+| Read 1 byte | `SELECT value FROM bytes WHERE addr = 0x401000` |
+| Read N bytes as hex (uppercase, no spaces) | `SELECT hex(blob_concat(value)) FROM (SELECT value FROM bytes WHERE start_addr = 0x401000 AND n = 16 ORDER BY addr)` |
+| Read N bytes as BLOB | `SELECT blob_concat(value) FROM (SELECT value FROM bytes WHERE start_addr = 0x401000 AND n = 16 ORDER BY addr)` |
+| Read a range | `SELECT value FROM bytes WHERE addr >= 0x401000 AND addr < 0x401010 ORDER BY addr` |
 
-The hidden `start_ea` + `n` columns request exactly N consecutive bytes
-beginning at X. They are deliberately distinct from the visible `ea` column
-so any predicate on `ea` (joins, compound `WHERE`) stays enforceable by
+The hidden `start_addr` + `n` columns request exactly N consecutive bytes
+beginning at X. They are deliberately distinct from the visible `addr` column
+so any predicate on `addr` (joins, compound `WHERE`) stays enforceable by
 SQLite. The bounded read does not skip unmapped addresses; rows beyond the
 mapped region report whatever `get_byte()` yields there.
 
-`blob_concat(value)` is a libxsql aggregate that concatenates row values
+`blob_concat(value)` is a built-in aggregate that concatenates row values
 into one BLOB; `hex()` is the SQLite built-in BLOB→hex helper (uppercase).
 
 ### Unbounded-range gotcha
 
-`WHERE ea > X` **without an upper bound or LIMIT** walks every mapped byte
+`WHERE addr > X` **without an upper bound or LIMIT** walks every mapped byte
 from X to end-of-image — millions of rows and seconds of wall time. Always
 pair the read with one of:
 
-- `WHERE start_ea = X AND n = N` (bounded read shape)
-- `AND ea < B` (two-sided range)
+- `WHERE start_addr = X AND n = N` (bounded read shape)
+- `AND addr < B` (two-sided range)
 - outer `LIMIT N`
 
 The table has no per-call cap; arbitrarily large windows are supported as
@@ -184,13 +184,13 @@ Use `byte_search` for raw bytes/opcodes. It requires `WHERE pattern = ...`; `mat
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `address` | INT | Match address |
+| `addr` | INT | Match address |
 | `matched_hex` | TEXT | Matched bytes rendered as hex text |
 | `matched_bytes` | BLOB | Matched bytes as raw bytes |
 | `size` | INT | Match size in bytes |
 | `pattern` | HIDDEN TEXT | Required IDA byte pattern input |
-| `start_ea` | HIDDEN INT | Optional inclusive lower bound |
-| `end_ea` | HIDDEN INT | Optional exclusive upper bound |
+| `start_addr` | HIDDEN INT | Optional inclusive lower bound |
+| `end_addr` | HIDDEN INT | Optional exclusive upper bound |
 | `max_results` | HIDDEN INT | Optional generator cap |
 
 **Pattern syntax (IDA native):**
@@ -203,20 +203,20 @@ Use `byte_search` for raw bytes/opcodes. It requires `WHERE pattern = ...`; `mat
 **Example:**
 ```sql
 -- Find all matches for a pattern
-SELECT address, matched_hex, size
+SELECT addr, matched_hex, size
 FROM byte_search
 WHERE pattern = '48 8B ? 00'
 LIMIT 10;
 
 -- First match only
-SELECT printf('0x%llX', address) AS addr
+SELECT printf('0x%llX', addr) AS addr
 FROM byte_search
 WHERE pattern = 'CC CC CC'
-ORDER BY address
+ORDER BY addr
 LIMIT 1;
 
 -- Search with alternatives
-SELECT address, matched_hex
+SELECT addr, matched_hex
 FROM byte_search
 WHERE pattern = 'E8 (01 02 03 04)'
 LIMIT 20;
@@ -227,17 +227,17 @@ LIMIT 20;
 To answer "How many functions use RDTSC instruction?" efficiently:
 ```sql
 -- Count unique functions containing RDTSC (opcode: 0F 31)
-SELECT COUNT(DISTINCT f.address) as count
+SELECT COUNT(DISTINCT f.addr) as count
 FROM byte_search b
-JOIN funcs f ON b.address >= f.address AND b.address < f.end_ea
+JOIN funcs f ON b.addr >= f.addr AND b.addr < f.end_addr
 WHERE b.pattern = '0F 31';
 
 -- List those functions with names
 SELECT DISTINCT
-    f.address as func_ea,
+    f.addr as func_addr,
     f.name as func_name
 FROM byte_search b
-JOIN funcs f ON b.address >= f.address AND b.address < f.end_ea
+JOIN funcs f ON b.addr >= f.addr AND b.addr < f.end_addr
 WHERE b.pattern = '0F 31';
 ```
 
@@ -306,12 +306,12 @@ The `rebuild_strings()` function configures IDA's string detection with sensible
 | Table/Function | Architecture | Notes |
 |----------------|-------------|-------|
 | `COUNT(*) FROM strings` | Cached table count path | O(1) current string-list count |
-| `strings` | Cached | Rebuilt on demand via `rebuild_strings()`; fast once cached |
+| `strings` | Query-scoped | Materialized from IDA's live string list on each scan (no persisted vtable cache); fast because IDA's `strlist` is already built. `rebuild_strings()` regenerates IDA's underlying string list |
 | `byte_search` | Native binary search table | Much faster than iterating instructions table |
-| `bytes WHERE ea = X` | Point lookup | O(1); virtual table index |
-| `bytes WHERE start_ea = X AND n = N` | Bounded read via hidden `start_ea` + `n` | O(N); virtual table index |
-| `bytes WHERE ea >= A AND ea < B` | Range scan | O(range); virtual table index |
-| `bytes WHERE ea > X` (unbounded) | Range scan | **AVOID** — walks every mapped byte to end-of-image; use bounded forms |
+| `bytes WHERE addr = X` | Point lookup | O(1); virtual table index |
+| `bytes WHERE start_addr = X AND n = N` | Bounded read via hidden `start_addr` + `n` | O(N); virtual table index |
+| `bytes WHERE addr >= A AND addr < B` | Range scan | O(range); virtual table index |
+| `bytes WHERE addr > X` (unbounded) | Range scan | **AVOID** — walks every mapped byte to end-of-image; use bounded forms |
 
 **Key rules:**
 - Always call `rebuild_strings()` before the first string query on a new database or after making code/data changes that may create new strings.
@@ -332,7 +332,7 @@ Categorize strings by security relevance for rapid threat assessment:
 SELECT rebuild_strings();
 
 WITH categorized AS (
-    SELECT address, content,
+    SELECT addr, content,
         CASE
             WHEN content LIKE '%password%' OR content LIKE '%passwd%' OR content LIKE '%secret%'
                 THEN 'credential'
@@ -366,24 +366,24 @@ Functions referencing security-relevant strings AND having significant size are 
 ```sql
 -- Suspicious functions: reference interesting strings AND are non-trivial
 WITH interesting_strings AS (
-    SELECT address, content FROM strings
+    SELECT addr, content FROM strings
     WHERE content LIKE '%password%' OR content LIKE '%encrypt%'
        OR content LIKE '%decrypt%' OR content LIKE '%http%'
        OR content LIKE '%socket%' OR content LIKE '%connect%'
 ),
 string_funcs AS (
-    SELECT DISTINCT (SELECT address FROM funcs WHERE x.from_ea >= address AND x.from_ea < end_ea LIMIT 1) AS func_addr,
+    SELECT DISTINCT (SELECT addr FROM funcs WHERE x.from_addr >= addr AND x.from_addr < end_addr LIMIT 1) AS func_addr,
            s.content AS matched_string
     FROM interesting_strings s
-    JOIN xrefs x ON x.to_ea = s.address
-    WHERE (SELECT address FROM funcs WHERE x.from_ea >= address AND x.from_ea < end_ea LIMIT 1) IS NOT NULL
+    JOIN xrefs x ON x.to_addr = s.addr
+    WHERE (SELECT addr FROM funcs WHERE x.from_addr >= addr AND x.from_addr < end_addr LIMIT 1) IS NOT NULL
 )
-SELECT (SELECT name FROM funcs WHERE sf.func_addr >= address AND sf.func_addr < end_ea LIMIT 1) AS func_name,
+SELECT (SELECT name FROM funcs WHERE sf.func_addr >= addr AND sf.func_addr < end_addr LIMIT 1) AS func_name,
        printf('0x%X', sf.func_addr) AS addr,
        f.size AS func_size,
        GROUP_CONCAT(sf.matched_string, ' | ') AS strings_referenced
 FROM string_funcs sf
-JOIN funcs f ON f.address = sf.func_addr
+JOIN funcs f ON f.addr = sf.func_addr
 GROUP BY sf.func_addr
 ORDER BY f.size DESC
 LIMIT 20;
@@ -396,19 +396,19 @@ Cross-category correlation for identifying data exfiltration or C2 communication
 ```sql
 -- Functions touching both crypto and network strings
 WITH crypto_refs AS (
-    SELECT DISTINCT (SELECT address FROM funcs WHERE x.from_ea >= address AND x.from_ea < end_ea LIMIT 1) AS func_addr
-    FROM strings s JOIN xrefs x ON x.to_ea = s.address
+    SELECT DISTINCT (SELECT addr FROM funcs WHERE x.from_addr >= addr AND x.from_addr < end_addr LIMIT 1) AS func_addr
+    FROM strings s JOIN xrefs x ON x.to_addr = s.addr
     WHERE s.content LIKE '%crypt%' OR s.content LIKE '%aes%'
        OR s.content LIKE '%cipher%' OR s.content LIKE '%hash%'
 ),
 network_refs AS (
-    SELECT DISTINCT (SELECT address FROM funcs WHERE x.from_ea >= address AND x.from_ea < end_ea LIMIT 1) AS func_addr
-    FROM strings s JOIN xrefs x ON x.to_ea = s.address
+    SELECT DISTINCT (SELECT addr FROM funcs WHERE x.from_addr >= addr AND x.from_addr < end_addr LIMIT 1) AS func_addr
+    FROM strings s JOIN xrefs x ON x.to_addr = s.addr
     WHERE s.content LIKE '%socket%' OR s.content LIKE '%connect%'
        OR s.content LIKE '%send%' OR s.content LIKE '%recv%'
        OR s.content LIKE '%http%'
 )
-SELECT (SELECT name FROM funcs WHERE c.func_addr >= address AND c.func_addr < end_ea LIMIT 1) AS func_name,
+SELECT (SELECT name FROM funcs WHERE c.func_addr >= addr AND c.func_addr < end_addr LIMIT 1) AS func_name,
        printf('0x%X', c.func_addr) AS addr
 FROM crypto_refs c
 JOIN network_refs n ON n.func_addr = c.func_addr;

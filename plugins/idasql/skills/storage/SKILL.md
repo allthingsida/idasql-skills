@@ -106,12 +106,12 @@ VALUES('re_source:' || printf('0x%X', 0x401000),
                     'analyst', 'alice', 'date', date('now')));
 
 -- Find unannotated functions by joining with funcs
-SELECT f.name, printf('0x%X', f.address) AS addr
+SELECT f.name, printf('0x%X', f.addr) AS addr
 FROM funcs f
 WHERE f.name NOT LIKE 'sub_%'
   AND NOT EXISTS (
     SELECT 1 FROM netnode_kv
-    WHERE key = 're_source:' || printf('0x%X', f.address)
+    WHERE key = 're_source:' || printf('0x%X', f.addr)
   )
 ORDER BY f.size DESC
 LIMIT 20;
