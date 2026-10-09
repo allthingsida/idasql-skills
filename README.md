@@ -1,6 +1,6 @@
 # idasql-skills
 
-Claude Code / Copilot CLI and Codex plugin packaging for [idasql](https://github.com/allthingsida/idasql) — a [live SQL](https://github.com/0xeb/libxsql) interface to IDA Pro databases.
+Claude Code / Copilot CLI and Codex plugin packaging for [idasql](https://github.com/allthingsida/idasql), a [live SQL](https://github.com/0xeb/libxsql) interface to IDA Pro databases.
 
 ## Prerequisites
 
@@ -80,6 +80,7 @@ If you want to test directly from a checkout, keep the repo where it is and use 
 |-------|-------------|-------------|
 | `connect` | Connection, CLI, HTTP, UI context, routing index | Starting a session, CLI options, HTTP server, pragmas |
 | `ui-context` | Live IDA GUI state capture | What's on screen, current selection/view, active widget |
+| `deep-links` | Clickable `ida://` links (IDA 9.4) | Linking functions, strings and types in answers; opening a result in IDA |
 | `disassembly` | Functions, segments, instructions, blocks | Querying disassembly, instruction analysis, file generation |
 | `data` | Strings, bytes, string cross-references | String search, byte access, binary pattern search |
 | `grep` | Named entity search | Find functions, labels, types, and members by pattern |
@@ -97,12 +98,12 @@ If you want to test directly from a checkout, keep the repo where it is and use 
 ## Notes
 
 - The supported Codex path is plugin-based installation. Flat installs into `~/.codex/skills` are possible, but only if you manually rename every skill with an `idasql-` prefix to avoid collisions.
-- The plugin-based layout keeps the repo’s natural `idasql` ownership model intact.
+- The plugin-based layout keeps the repo's natural `idasql` ownership model intact.
 
 ## Links
 
-- [idasql](https://github.com/allthingsida/idasql) — CLI and plugin
-- [libxsql](https://github.com/0xeb/libxsql) — Core SQLite virtual table framework
+- [idasql](https://github.com/allthingsida/idasql): CLI and plugin
+- [libxsql](https://github.com/0xeb/libxsql): Core SQLite virtual table framework
 
 ## Author
 
@@ -110,4 +111,4 @@ If you want to test directly from a checkout, keep the repo where it is and use 
 
 ## License
 
-This project and all its contents — including skill definitions, reference documentation, and configuration files — are licensed under the [Human-Origin Source License v1.0](LICENSE).
+This project and all its contents (including skill definitions, reference documentation, and configuration files) are licensed under the [Human-Origin Source License v1.0](LICENSE).

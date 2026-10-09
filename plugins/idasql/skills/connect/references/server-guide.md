@@ -21,16 +21,19 @@ idasql -s database.i64 --http 8080 --token mysecret
 |----------|--------|------|-------------|
 | `/` | GET | No | Server greeting |
 | `/help` | GET | No | API documentation (for LLM discovery) |
-| `/query` | POST | Yes* | Execute SQL query or semicolon-separated script (body = raw SQL) |
+| `/query` | POST | Yes* | Execute SQL query or semicolon-separated script |
+| `/cancel` | POST | Yes* | Cooperatively cancel query requests that are already in flight |
 | `/status` | GET | Yes* | Health check |
 | `/shutdown` | POST | Yes* | Stop server |
 
 *Auth required only if `--token` was specified.
 
-> **The `/query` body is the raw SQL itself — not a JSON object.** Send the SQL
-> as the request body (`-d "SELECT …"`); do **not** wrap it as `{"sql":"…"}`. A
-> JSON wrapper is handed verbatim to SQLite and fails with
-> `unrecognized token "{"`. (The *response* is JSON: `{success, results:[…]}`.)
+Raw SQL is the portable request body in every server mode:
+`--data-binary "SELECT …"`. The REPL/plugin `.http` server additionally accepts an
+`application/json` object with a string `sql` field and optional Boolean
+`continue_on_error` / `include_sql` fields. Standalone CLI `--http` treats every
+body as raw SQL, so do not send the JSON object form when a client must work
+across both modes. The response is JSON in either mode.
 
 ## Example with curl
 
@@ -39,19 +42,44 @@ idasql -s database.i64 --http 8080 --token mysecret
 curl http://localhost:8080/help
 
 # Execute SQL query
-curl -X POST http://localhost:8080/query -d "SELECT name, size FROM funcs LIMIT 5"
+curl -X POST http://localhost:8080/query --data-binary "SELECT name, size FROM funcs LIMIT 5"
 
 # Execute a short SQL script
-curl -X POST http://localhost:8080/query -d "SELECT * FROM binary; SELECT COUNT(*) FROM funcs;"
+curl -X POST http://localhost:8080/query --data-binary "SELECT * FROM binary; SELECT COUNT(*) FROM funcs;"
+
+# Continue after a failed statement (standalone CLI and REPL/plugin servers)
+curl -X POST "http://localhost:8080/query?continue_on_error=1&include_sql=1" \
+     --data-binary "SELECT * FROM missing_table; SELECT COUNT(*) FROM funcs;"
+
+# REPL/plugin .http only: equivalent JSON request options
+curl -X POST http://localhost:8080/query \
+     -H "Content-Type: application/json" \
+     -d '{"sql":"SELECT * FROM binary; SELECT COUNT(*) FROM funcs;","continue_on_error":true,"include_sql":true}'
 
 # With authentication
 curl -X POST http://localhost:8080/query \
      -H "Authorization: Bearer mysecret" \
-     -d "SELECT * FROM funcs"
+     --data-binary "SELECT * FROM funcs"
 
 # Check status
 curl http://localhost:8080/status
+
+# From another client, request cancellation of a long-running query
+curl -X POST -d '' http://localhost:8080/cancel
 ```
+
+## Cooperative Cancellation
+
+`POST /cancel` advances the server's cancellation epoch. Query requests that
+started before that POST observe the request when their current operation next
+polls for cancellation; later queries start cleanly. Send the same bearer token
+or `X-XSQL-Token` used for `/query` when authentication is enabled.
+
+Cancellation is cooperative, so response latency depends on the table or SQL
+operation being executed. A cancelled result-bearing statement can remain a
+partial success with `partial: true` and a warning containing `cancelled`; it is
+not reported as `timed_out`. A cancelled statement that has no result rows can
+return a hard `Query cancelled` error.
 
 ## Python Automation Patterns
 
@@ -167,7 +195,7 @@ This same pattern works in any language with HTTP support (JavaScript, PowerShel
 
 ## Response Format (JSON)
 
-**Every `/query` response uses the canonical script envelope** \u2014 even a single
+**Every `/query` response uses the canonical script envelope** — even a single
 statement is returned as an array of one under `results[]`. There is no
 separate top-level `rows`/`columns` shape and no `statements[]` key.
 
@@ -203,8 +231,9 @@ A semicolon-separated script returns one entry per statement in `results[]`:
 
 On a statement error, that entry's `success` is `false` and `error` carries the
 message; top-level `success` is `false` and `first_error_index` points at the
-first failing statement. Fail-fast is the default \u2014 pass `?continue_on_error=1`
-to run every statement regardless.
+first failing statement. Fail-fast is the default — both standalone CLI and
+REPL/plugin HTTP servers honor `?continue_on_error=1` to run every statement
+regardless. Add `?include_sql=1` when each result should echo its statement.
 
 ## Compatibility Notes
 

@@ -18,7 +18,7 @@ WHERE name IN ('WSAStartup', 'WSACleanup', 'WSAGetLastError',
                'WSASocketW', 'WSAConnect', 'WSASend', 'WSARecv');
 
 -- Functions using sockets
-SELECT DISTINCT (SELECT name FROM funcs WHERE dc.func_addr >= addr AND dc.func_addr < end_addr LIMIT 1) as func_name
+SELECT DISTINCT (SELECT name FROM funcs WHERE addr = dc.func_addr) as func_name
 FROM disasm_calls dc
 JOIN imports i ON dc.callee_addr = i.addr
 WHERE i.name IN ('socket', 'connect', 'send', 'recv', 'bind', 'listen', 'accept')
@@ -67,13 +67,13 @@ WITH net_imports AS (
        OR i.name LIKE 'curl_%'
 ),
 net_strings AS (
-    SELECT x.from_addr as func_addr, s.content as api, 'string' as source
+    SELECT x.from_func as func_addr, s.content as api, 'string' as source
     FROM strings s
     JOIN xrefs x ON x.to_addr = s.addr
     WHERE s.content LIKE 'http://%' OR s.content LIKE 'https://%'
        OR s.content LIKE '%User-Agent%' OR s.content LIKE '%Content-Type%'
 )
-SELECT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) as function, api, source
+SELECT (SELECT name FROM funcs WHERE addr = func_addr) as function, api, source
 FROM (SELECT * FROM net_imports UNION ALL SELECT * FROM net_strings)
 ORDER BY function;
 ```

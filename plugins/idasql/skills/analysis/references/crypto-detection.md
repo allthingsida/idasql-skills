@@ -15,7 +15,7 @@ WHERE content LIKE '%openssl%' OR content LIKE '%libssl%'
    OR content LIKE '%libcrypto%' OR content LIKE '%-----BEGIN%';
 
 -- Functions referencing OpenSSL
-SELECT DISTINCT (SELECT name FROM funcs WHERE dc.func_addr >= addr AND dc.func_addr < end_addr LIMIT 1) as func_name, dc.callee_name
+SELECT DISTINCT (SELECT name FROM funcs WHERE addr = dc.func_addr) as func_name, dc.callee_name
 FROM disasm_calls dc
 JOIN imports i ON dc.callee_addr = i.addr
 WHERE i.name LIKE '%SSL_%' OR i.name LIKE '%EVP_%'
@@ -71,12 +71,12 @@ WITH crypto_imports AS (
        OR i.name LIKE '%BCrypt%' OR i.name LIKE '%Hash%'
 ),
 crypto_strings AS (
-    SELECT x.from_addr as func_addr, s.content as detail, 'string' as source
+    SELECT x.from_func as func_addr, s.content as detail, 'string' as source
     FROM strings s
     JOIN xrefs x ON x.to_addr = s.addr
     WHERE s.content LIKE '%AES%' OR s.content LIKE '%RSA%' OR s.content LIKE '%SHA%'
 )
-SELECT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) as function, detail, source
+SELECT (SELECT name FROM funcs WHERE addr = func_addr) as function, detail, source
 FROM (SELECT * FROM crypto_imports UNION ALL SELECT * FROM crypto_strings)
 ORDER BY function;
 ```

@@ -10,6 +10,8 @@ allowed-tools:
   - Grep
 ---
 
+> **Links:** when an answer names functions, addresses, strings or types, make them clickable on IDA 9.4 builds: `[name](uri)` from the `deep_links` table, outside code blocks (skill `deep-links`).
+
 ---
 
 ## Trigger Intents
@@ -98,13 +100,19 @@ Cross-references - the most important table for understanding code relationships
 | `to_addr` | INT | Target address (what is referenced) |
 | `type` | INT | Xref type code (never the ordinary-flow code, see below) |
 | `is_code` | INT | 1=code xref (call/jump), 0=data xref |
-| `from_func` | INT | Pre-computed containing function address (NULL when not in a function) |
+| `from_func` | INT | Pre-computed containing function address (NULL when not in a function; a source in a tail shared by several functions is one row per owner) |
+| `kind` | TEXT | Readable `type`: `call`, `jump`, `code` for code xrefs; `read`, `write`, `offset`, `text`, `info`, `data` for data xrefs |
 
 Semantics: the surface exposes **real references only** — ordinary fall-through
 flow edges (fl_F: each instruction "referencing" the next) are excluded on both
 the full scan and the `to_addr`/`from_addr`/`from_func` fast paths, matching
 IDA's Ctrl-X view and the other xsql tools. Counts therefore reflect
 calls/jumps/data refs, not instruction adjacency.
+
+Shared tails fan out: a reference from a chunk owned by several functions is one row
+per owning function, so a count can exceed IDA's Ctrl-X list there. `callers`,
+`callees`, `call_graph` and `func_summary.callers` count every owner the same way;
+`func_summary.call_sites_in` counts each call site once.
 
 ```sql
 -- Who calls function at 0x401000?
@@ -135,9 +143,15 @@ errors). Embedded members are expanded recursively with a dotted `member_path`.
 | `xref_type` | INT | Raw IDA xref type code |
 | `xref_kind` | TEXT | `read` / `write` / `offset` / `call` / `jump` / `flow` |
 | `function_addr` / `function_name` | INT/TEXT | Containing function (NULL if none) |
-| `operand_index` | INT | Operand referencing the member (best-effort; NULL) |
+| `operand_index` | INT | The operand that lands on the member: a struct-offset expression, or a stack variable of the structure's type (`[ebp+entry.balance]`); NULL when no operand does |
 | `instruction_text` | TEXT | Disasm line at `xref_from` (NULL if not an instruction) |
-| `access_offset` / `access_size` | INT | Access sub-offset / width (best-effort; NULL) |
+| `access_offset` | INT | Byte offset of the access inside the member (0 for a direct field access) |
+| `access_size` | INT | Access width in bytes (NULL when the instruction takes the member's address: an offset-of immediate or an `lea`) |
+| `access_root_type` | TEXT | The structure the access starts from (the struct-offset root, or the stack variable's type) |
+
+A nested member's rows list every xref to the embedded type's member, including
+accesses made through other containers. `access_root_type = type_name` keeps the
+accesses made through the queried container.
 
 ```sql
 -- Who writes _EH3_EXCEPTION_REGISTRATION.TryLevel?
@@ -149,6 +163,10 @@ WHERE type_name = '_EH3_EXCEPTION_REGISTRATION' AND member_name = 'TryLevel';
 SELECT member_path, count(*) AS refs FROM struct_member_xrefs
 WHERE type_ordinal = (SELECT ordinal FROM types WHERE name = 'db_entry_t')
 GROUP BY member_path;
+
+-- Only accesses made through the queried container, not other embeddings
+SELECT member_path, function_name, instruction_text FROM struct_member_xrefs
+WHERE type_name = 'CPPEH_RECORD' AND access_root_type = type_name;
 ```
 
 ---
@@ -192,9 +210,13 @@ Who calls each function. Caller names are resolved by the view from the `funcs` 
 Underlying query:
 ```sql
 SELECT x.to_addr as func_addr, x.from_addr as caller_addr,
-       COALESCE((SELECT name FROM names WHERE addr = x.from_func LIMIT 1), printf('sub_%X', x.from_func)) as caller_name,
+       COALESCE(f.name, n.name, printf('sub_%X', x.from_func)) as caller_name,
        x.from_func as caller_func_addr
-FROM xrefs x WHERE x.is_code = 1 AND x.from_func != 0
+FROM xrefs x
+LEFT JOIN funcs f ON f.addr = x.from_func
+LEFT JOIN names n ON n.addr = x.from_func
+WHERE x.is_code = 1 AND x.from_func IS NOT NULL
+  AND x.to_addr IN (SELECT addr FROM funcs)
 ```
 
 ```sql
@@ -252,8 +274,9 @@ FROM string_refs GROUP BY string_addr ORDER BY ref_count DESC LIMIT 10;
 ```
 
 ### data_refs
-Cached table of data (non-code) cross-references with containing function info.
-Whole-program aggregates are supported.
+Cached table of data (non-code) cross-references with containing function info, from
+every head of each function body (inline data such as jump and pointer tables included,
+so it agrees with `xrefs` where `from_func` is set). Whole-program aggregates are supported.
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -262,10 +285,15 @@ Whole-program aggregates are supported.
 | `from_func_addr` | INT | Containing function address |
 | `from_func_name` | TEXT | Containing function name |
 | `ref_type` | INT | Xref type code |
+| `kind` | TEXT | Readable `ref_type`: `read`, `write`, `offset`, `text`, `info` or `data` |
 
 ```sql
 -- Data references from a specific function
 SELECT * FROM data_refs WHERE from_func_addr = 0x401000;
+
+-- Globals a function writes
+SELECT DISTINCT printf('0x%X', to_addr) AS target FROM data_refs
+WHERE from_func_addr = 0x401000 AND kind = 'write';
 
 -- Functions with most data references
 SELECT from_func_name, COUNT(*) as data_ref_count
@@ -428,7 +456,7 @@ The `xrefs` table has **optimized filters** using efficient IDA SDK APIs:
 | `to_addr = X` | 0.5 | O(xrefs to X) — fast, uses IDA's xref index |
 | `from_addr = X` | 0.5 | O(xrefs from X) — fast, uses IDA's xref index |
 | `from_func = X` | 1.0 | O(callees of X) — uses XrefsFromFuncIterator |
-| No equality filter on `to_addr` / `from_addr` / `from_func` | — | Falls back to a cache of xrefs to function entry points only — avoid relying on it for complete import/data/non-function coverage |
+| No equality filter on `to_addr` / `from_addr` / `from_func` | — | Full scan: every xref in the database, built once per query — complete, but heavy on a large database |
 
 **Always filter xrefs by `to_addr`, `from_addr`, or `from_func`. Avoid unconstrained scans.**
 
@@ -465,7 +493,7 @@ LIMIT 10;
 ### Find Functions Calling a Specific API
 
 ```sql
-SELECT DISTINCT (SELECT name FROM funcs WHERE from_addr >= addr AND from_addr < end_addr LIMIT 1) as caller
+SELECT DISTINCT (SELECT name FROM func_at(from_addr) LIMIT 1) as caller
 FROM xrefs
 WHERE to_addr = (SELECT addr FROM imports WHERE name = 'CreateFileW');
 ```
@@ -473,7 +501,7 @@ WHERE to_addr = (SELECT addr FROM imports WHERE name = 'CreateFileW');
 ### String Cross-Reference Analysis
 
 ```sql
-SELECT s.content, (SELECT name FROM funcs WHERE x.from_addr >= addr AND x.from_addr < end_addr LIMIT 1) as used_by
+SELECT s.content, (SELECT name FROM func_at(x.from_addr) LIMIT 1) as used_by
 FROM strings s
 JOIN xrefs x ON s.addr = x.to_addr
 WHERE s.content LIKE '%password%';
@@ -500,7 +528,7 @@ SELECT
     s.name as segment,
     COUNT(*) as data_refs
 FROM funcs f
-JOIN xrefs x ON x.from_addr BETWEEN f.addr AND f.end_addr
+JOIN xrefs x ON x.from_func = f.addr
 JOIN segments s ON x.to_addr BETWEEN s.start_addr AND s.end_addr
 WHERE s.class = 'DATA' AND x.is_code = 0
 GROUP BY f.addr, s.name
@@ -590,7 +618,7 @@ WITH RECURSIVE callers_cte AS (
     JOIN disasm_calls dc ON dc.callee_addr = c.func_addr
     WHERE c.depth < 5
 )
-SELECT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) as caller, MIN(depth) as distance
+SELECT (SELECT name FROM funcs WHERE addr = func_addr) as caller, MIN(depth) as distance
 FROM callers_cte
 GROUP BY func_addr
 ORDER BY distance, caller;
@@ -650,7 +678,7 @@ FROM funcs f
 WHERE EXISTS (
     SELECT 1 FROM xrefs x
     JOIN strings s ON x.to_addr = s.addr
-    WHERE x.from_addr BETWEEN f.addr AND f.end_addr
+    WHERE x.from_func = f.addr
 );
 ```
 

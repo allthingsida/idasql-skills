@@ -224,6 +224,34 @@ Decompiler local and label mutation is table-driven:
 - Rename/comment locals with `UPDATE ctree_lvars` using `func_addr + idx`.
 - Rename labels with `UPDATE ctree_labels` using `func_addr + label_num`.
 
+## Split Expression Workflow (Merged Stores)
+
+Compilers initialise adjacent fields with one wide store, and Hex-Rays prints it as one:
+`*(_QWORD *)&info.flags = 0x600000001LL;`. "Split expression" makes it print per field.
+Do it after the struct type is applied, so each piece lands on a named field.
+
+```sql
+-- 1) Find merged stores: assignments whose target is a wide cast of something narrower.
+SELECT printf('0x%X', addr) AS addr, line FROM pseudocode
+WHERE func_addr = 0x401000 AND line LIKE '%*(_QWORD *)&%= 0x%';
+
+-- 2) The merged instruction is the assignment's ctree address.
+SELECT printf('0x%X', addr) AS addr FROM ctree
+WHERE func_addr = 0x401000 AND op_name = 'cot_asg' AND addr = 0x401016;
+
+-- 3) Split into 4-byte pieces (IDA's first step for an 8-byte store), check the result.
+INSERT INTO decompiler_splits(addr, piece_size) VALUES (0x401016, 4);
+SELECT decompile(0x401000);      -- info.flags = 1; info.version = 6;
+
+-- 4) Finer pieces, or undo.
+UPDATE decompiler_splits SET piece_size = 2 WHERE addr = 0x401016;
+DELETE FROM decompiler_splits WHERE addr = 0x401016;
+```
+
+The setting is saved with the database and is the same one IDA's "Split expression" menu
+stores, so the user sees it in the GUI. A split where nothing merges changes nothing (delete
+it). Take a checkpoint first when splitting many stores in one pass.
+
 ## Persistence and Lifecycle Semantics
 
 Writes are visible immediately within the current process, but they are not flushed to the IDB file until an explicit save path is used.

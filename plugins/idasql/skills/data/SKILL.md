@@ -8,6 +8,8 @@ allowed-tools:
   - Grep
 ---
 
+> **Links:** when an answer names functions, addresses, strings or types, make them clickable on IDA 9.4 builds: `[name](uri)` from the `deep_links` table, outside code blocks (skill `deep-links`).
+
 ---
 
 ## Trigger Intents
@@ -120,7 +122,7 @@ Use `strings + xrefs + funcs` directly. This is the canonical pattern.
 SELECT
     s.content as string_value,
     printf('0x%X', x.from_addr) as ref_addr,
-    (SELECT name FROM funcs WHERE x.from_addr >= addr AND x.from_addr < end_addr LIMIT 1) as func_name
+    (SELECT name FROM func_at(x.from_addr) LIMIT 1) as func_name
 FROM strings s
 JOIN xrefs x ON x.to_addr = s.addr
 WHERE s.content LIKE '%error%' OR s.content LIKE '%fail%'
@@ -128,7 +130,7 @@ ORDER BY func_name, ref_addr;
 
 -- Functions with most string references
 SELECT
-    (SELECT name FROM funcs WHERE x.from_addr >= addr AND x.from_addr < end_addr LIMIT 1) as func_name,
+    (SELECT name FROM func_at(x.from_addr) LIMIT 1) as func_name,
     COUNT(*) as string_refs
 FROM strings s
 JOIN xrefs x ON x.to_addr = s.addr
@@ -155,11 +157,38 @@ LIMIT 10;
 The hidden `start_addr` + `n` columns request exactly N consecutive bytes
 beginning at X. They are deliberately distinct from the visible `addr` column
 so any predicate on `addr` (joins, compound `WHERE`) stays enforceable by
-SQLite. The bounded read does not skip unmapped addresses; rows beyond the
-mapped region report whatever `get_byte()` yields there.
+SQLite. The bounded read does not skip unmapped addresses; it always yields N
+rows.
 
 `blob_concat(value)` is a built-in aggregate that concatenates row values
 into one BLOB; `hex()` is the SQLite built-in BLOB→hex helper (uppercase).
+
+### Uninitialized bytes read back as NULL
+
+`value` is SQL **NULL** for a mapped-but-uninitialized byte (BSS and other
+sparse mapped regions) — the canonical byte surface keeps "unknown" distinct
+from "a real 0". The `is_initialized` column carries the 0/1 flag.
+
+`blob_concat` **skips NULL inputs**, so a bulk read spanning uninitialized
+bytes returns a BLOB *shorter* than `n` (all-NULL windows return NULL). When
+the byte count must match the window, either restrict the read or make the
+gaps explicit:
+
+```sql
+-- Concrete bytes only (short result is now intentional)
+SELECT hex(blob_concat(value)) FROM (
+  SELECT value FROM bytes
+  WHERE start_addr = 0x401000 AND n = 16 AND is_initialized = 1
+  ORDER BY addr);
+
+-- Fixed-width window: substitute 0 for uninitialized bytes
+SELECT hex(blob_concat(COALESCE(value, 0))) FROM (
+  SELECT value FROM bytes WHERE start_addr = 0x401000 AND n = 16 ORDER BY addr);
+
+-- Check first whether the window is fully initialized
+SELECT COUNT(*) - SUM(is_initialized) AS uninitialized
+FROM bytes WHERE start_addr = 0x401000 AND n = 16;
+```
 
 ### Unbounded-range gotcha
 
@@ -176,6 +205,29 @@ long as the constraint pair is bounded.
 
 Use `heads` when you need IDA item size/type metadata.
 
+### High addresses (>= 2^63)
+
+An address at or above `0x8000000000000000` (a kernel image at `0xFFFFF800...`)
+is a **negative INTEGER** in `addr`, so `ORDER BY addr` lists the high half first,
+then the low half. `bytes`, `heads` and `byte_search` return and order such rows
+exactly as SQLite would.
+
+- Write high addresses as hex literals (`0xFFFFF80000100000`) or the negative
+  decimal (`-8796091973632`), **never** as a decimal >= 2^63: SQLite reads
+  `18446735277617577984` as a REAL and the predicate matches nothing.
+- `addr >= 0xFFFFF80000000000` also matches the whole low half. For the high half
+  only: `addr BETWEEN 0xFFFFF80000000000 AND -1`.
+- A `start_addr` + `n` read that crosses `0x7FFFFFFFFFFFFFFF` still yields N
+  rows; `ORDER BY addr` lists the part at or above 2^63 first. Near the top it
+  stops before `0xFFFFFFFFFFFFFFFF` (BADADDR, never an address).
+
+```sql
+-- The first 16 mapped bytes of the high half, in address order
+SELECT printf('0x%llX', addr) AS addr, value FROM bytes
+WHERE addr BETWEEN 0xFFFFF80000000000 AND -1
+ORDER BY bytes.addr LIMIT 16;
+```
+
 ---
 
 ## Binary Search Table
@@ -189,8 +241,8 @@ Use `byte_search` for raw bytes/opcodes. It requires `WHERE pattern = ...`; `mat
 | `matched_bytes` | BLOB | Matched bytes as raw bytes |
 | `size` | INT | Match size in bytes |
 | `pattern` | HIDDEN TEXT | Required IDA byte pattern input |
-| `start_addr` | HIDDEN INT | Optional inclusive lower bound |
-| `end_addr` | HIDDEN INT | Optional exclusive upper bound |
+| `start_addr` | HIDDEN INT | Optional inclusive lower bound of the scan (unsigned address) |
+| `end_addr` | HIDDEN INT | Optional exclusive upper bound of the scan (unsigned address) |
 | `max_results` | HIDDEN INT | Optional generator cap |
 
 **Pattern syntax (IDA native):**
@@ -199,6 +251,13 @@ Use `byte_search` for raw bytes/opcodes. It requires `WHERE pattern = ...`; `mat
 - `"(01 02 03)"` - Alternatives (match any of these bytes)
 
 **Note:** Nibble wildcards and regex are not supported in byte patterns.
+
+**Order and high addresses:** matches come back in `addr` order as SQL sorts it,
+so a match at or above `0x8000000000000000` (a negative `addr`) comes before the
+low-half matches, and `ORDER BY addr LIMIT n` is free. `start_addr` / `end_addr`
+are plain unsigned scan bounds; to keep only kernel-half matches filter on `addr`
+(`AND addr BETWEEN 0xFFFFF80000000000 AND -1`), since `addr >= <high hex>`
+includes the low half too.
 
 **Example:**
 ```sql
@@ -212,7 +271,7 @@ LIMIT 10;
 SELECT printf('0x%llX', addr) AS addr
 FROM byte_search
 WHERE pattern = 'CC CC CC'
-ORDER BY addr
+ORDER BY byte_search.addr
 LIMIT 1;
 
 -- Search with alternatives
@@ -227,23 +286,23 @@ LIMIT 20;
 To answer "How many functions use RDTSC instruction?" efficiently:
 ```sql
 -- Count unique functions containing RDTSC (opcode: 0F 31)
-SELECT COUNT(DISTINCT f.addr) as count
+SELECT COUNT(DISTINCT fa.func_addr) as count
 FROM byte_search b
-JOIN funcs f ON b.addr >= f.addr AND b.addr < f.end_addr
+JOIN func_at(b.addr) fa
 WHERE b.pattern = '0F 31';
 
 -- List those functions with names
 SELECT DISTINCT
-    f.addr as func_addr,
-    f.name as func_name
+    fa.func_addr,
+    fa.name as func_name
 FROM byte_search b
-JOIN funcs f ON b.addr >= f.addr AND b.addr < f.end_addr
+JOIN func_at(b.addr) fa
 WHERE b.pattern = '0F 31';
 ```
 
 This is **much faster** than scanning all disassembly lines because:
 - `byte_search` uses IDA's native binary search
-- the containment join uses the compact `funcs` table instead of scanning every instruction
+- `func_at` resolves each hit's owning function(s) directly, tail chunks included, instead of scanning every instruction
 
 ---
 
@@ -372,13 +431,13 @@ WITH interesting_strings AS (
        OR content LIKE '%socket%' OR content LIKE '%connect%'
 ),
 string_funcs AS (
-    SELECT DISTINCT (SELECT addr FROM funcs WHERE x.from_addr >= addr AND x.from_addr < end_addr LIMIT 1) AS func_addr,
+    SELECT DISTINCT fa.func_addr,
            s.content AS matched_string
     FROM interesting_strings s
     JOIN xrefs x ON x.to_addr = s.addr
-    WHERE (SELECT addr FROM funcs WHERE x.from_addr >= addr AND x.from_addr < end_addr LIMIT 1) IS NOT NULL
+    JOIN func_at(x.from_addr) fa
 )
-SELECT (SELECT name FROM funcs WHERE sf.func_addr >= addr AND sf.func_addr < end_addr LIMIT 1) AS func_name,
+SELECT (SELECT name FROM funcs WHERE addr = sf.func_addr) AS func_name,
        printf('0x%X', sf.func_addr) AS addr,
        f.size AS func_size,
        GROUP_CONCAT(sf.matched_string, ' | ') AS strings_referenced
@@ -396,19 +455,19 @@ Cross-category correlation for identifying data exfiltration or C2 communication
 ```sql
 -- Functions touching both crypto and network strings
 WITH crypto_refs AS (
-    SELECT DISTINCT (SELECT addr FROM funcs WHERE x.from_addr >= addr AND x.from_addr < end_addr LIMIT 1) AS func_addr
-    FROM strings s JOIN xrefs x ON x.to_addr = s.addr
+    SELECT DISTINCT fa.func_addr
+    FROM strings s JOIN xrefs x ON x.to_addr = s.addr JOIN func_at(x.from_addr) fa
     WHERE s.content LIKE '%crypt%' OR s.content LIKE '%aes%'
        OR s.content LIKE '%cipher%' OR s.content LIKE '%hash%'
 ),
 network_refs AS (
-    SELECT DISTINCT (SELECT addr FROM funcs WHERE x.from_addr >= addr AND x.from_addr < end_addr LIMIT 1) AS func_addr
-    FROM strings s JOIN xrefs x ON x.to_addr = s.addr
+    SELECT DISTINCT fa.func_addr
+    FROM strings s JOIN xrefs x ON x.to_addr = s.addr JOIN func_at(x.from_addr) fa
     WHERE s.content LIKE '%socket%' OR s.content LIKE '%connect%'
        OR s.content LIKE '%send%' OR s.content LIKE '%recv%'
        OR s.content LIKE '%http%'
 )
-SELECT (SELECT name FROM funcs WHERE c.func_addr >= addr AND c.func_addr < end_addr LIMIT 1) AS func_name,
+SELECT (SELECT name FROM funcs WHERE addr = c.func_addr) AS func_name,
        printf('0x%X', c.func_addr) AS addr
 FROM crypto_refs c
 JOIN network_refs n ON n.func_addr = c.func_addr;

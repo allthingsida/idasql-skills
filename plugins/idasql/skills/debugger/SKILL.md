@@ -31,12 +31,12 @@ Route to:
 -- 1) Current breakpoint inventory
 SELECT printf('0x%X', addr) AS addr, type_name, enabled
 FROM breakpoints
-ORDER BY addr;
+ORDER BY breakpoints.addr;
 
 -- 2) Current patch inventory (fast: backed by IDA's patch list)
 SELECT printf('0x%X', addr) AS addr, original_value, value AS patched_value
 FROM bytes WHERE is_patched = 1
-ORDER BY addr
+ORDER BY bytes.addr
 LIMIT 50;
 
 -- 3) Validate target bytes before patch
@@ -122,10 +122,10 @@ UPDATE breakpoints SET enabled = 0 WHERE addr = 0x401000;
 -- Delete a breakpoint
 DELETE FROM breakpoints WHERE addr = 0x401000;
 
--- Find which functions have breakpoints
+-- Find which functions have breakpoints (func_at also resolves tail chunks)
 SELECT b.addr, f.name, b.type_name, b.enabled
 FROM breakpoints b
-JOIN funcs f ON b.addr >= f.addr AND b.addr < f.end_addr;
+JOIN func_at(b.addr) f;
 ```
 
 ---
@@ -138,15 +138,24 @@ mapped byte address; IDA item metadata such as size/type belongs to `heads`.
 | Column | Type | RW | Description |
 |--------|------|----|-------------|
 | `addr` | INT | R | Byte address |
-| `value` | INT | RW | Current byte value (UPDATE patches 1 byte) |
+| `value` | INT | RW | Current byte value, **NULL when `is_initialized = 0`** (UPDATE patches 1 byte and initializes the byte) |
 | `word` | INT | RW | 2-byte little-endian value (UPDATE patches 2 bytes) |
 | `dword` | INT | RW | 4-byte little-endian value (UPDATE patches 4 bytes) |
 | `qword` | INT | RW | 8-byte little-endian value (UPDATE patches 8 bytes) |
 | `original_value` | INT | R | Original byte value before patch |
-| `is_patched` | INT | R | 1 if byte differs from original (`WHERE is_patched = 1` enumerates patches fast) |
+| `is_patched` | INT | R | 1 if byte differs from original, or is an uninitialized byte a patch initialized (even with 0); `WHERE is_patched = 1` enumerates patches fast and lists the same bytes |
+| `is_initialized` | INT | R | 1 if the byte is loaded from the image, 0 for mapped-but-uninitialized (e.g. BSS) |
 | `fpos` | INT | R | Physical/input file offset (NULL when unavailable) |
 
 Revert a patch with `DELETE FROM bytes WHERE addr = ...` (or `WHERE is_patched = 1`).
+Patching an uninitialized byte initializes it (even with 0, which is a real change
+from NULL); `DELETE` returns it to the uninitialized NULL state. `UPDATE bytes SET
+value = value` therefore fails on a BSS byte — the read side is NULL.
+
+Writes take an exact integer: `144`, `0x90`, `'144'` or `144.0`. Text such as `'0x90'`,
+a fraction (`144.5`), a blob, or a value too wide for the column is refused with the
+reason. A `qword` above 0x7FFFFFFFFFFFFFFF is written as hex (`0xFFFFFFFFFFFFFFFF`) or
+as its signed value (`-1`).
 
 ```sql
 -- Read one address
@@ -170,7 +179,7 @@ UPDATE bytes SET dword = 0x90909090 WHERE addr = 0x401000;  -- little-endian
 
 -- Inspect patch inventory (fast: backed by IDA's patch list)
 SELECT printf('0x%X', addr) AS addr, original_value, value AS patched_value
-FROM bytes WHERE is_patched = 1 ORDER BY addr LIMIT 20;
+FROM bytes WHERE is_patched = 1 ORDER BY bytes.addr LIMIT 20;
 
 -- Persist once done
 SELECT save_database();
@@ -194,7 +203,7 @@ SELECT printf('0x%X', addr) AS addr,
        printf('0x%02X', original_value) AS old,
        printf('0x%02X', value) AS new
 FROM bytes WHERE is_patched = 1
-ORDER BY addr;
+ORDER BY bytes.addr;
 ```
 
 ---
@@ -286,7 +295,7 @@ Find and neutralize `IsDebuggerPresent` checks:
 
 ```sql
 -- Find calls to IsDebuggerPresent
-SELECT dc.addr, (SELECT name FROM funcs WHERE dc.func_addr >= addr AND dc.func_addr < end_addr LIMIT 1) AS func_name,
+SELECT dc.addr, (SELECT name FROM funcs WHERE addr = dc.func_addr) AS func_name,
        disasm_at(dc.addr, 2) AS context
 FROM disasm_calls dc
 WHERE dc.callee_name LIKE '%IsDebuggerPresent%';
@@ -303,13 +312,13 @@ UPDATE bytes SET value = 0x90 WHERE addr = 0x401036;
 
 ```sql
 -- Full patch report: what was changed and where
-SELECT printf('0x%X', addr) AS addr,
-       (SELECT name FROM funcs WHERE addr >= addr AND addr < end_addr LIMIT 1) AS func_name,
-       printf('0x%02X', original_value) AS original,
-       printf('0x%02X', value) AS patched,
-       disasm_at(addr) AS context
-FROM bytes WHERE is_patched = 1
-ORDER BY addr;
+SELECT printf('0x%X', b.addr) AS addr,
+       (SELECT name FROM func_at(b.addr) LIMIT 1) AS func_name,
+       printf('0x%02X', b.original_value) AS original,
+       printf('0x%02X', b.value) AS patched,
+       disasm_at(b.addr) AS context
+FROM bytes b WHERE b.is_patched = 1
+ORDER BY b.addr;
 ```
 
 ---

@@ -8,6 +8,8 @@ allowed-tools:
   - Grep
 ---
 
+> **Links:** when an answer names functions, addresses, strings or types, make them clickable on IDA 9.4 builds: `[name](uri)` from the `deep_links` table, outside code blocks (skill `deep-links`).
+
 This skill is the **authoritative reference** for IDA's type system as exposed through idasql. For annotation workflows that use types, see `annotations`. For decompiler-specific type interactions (ctree, lvars, union selection, numform), see `decompiler`.
 
 ---
@@ -639,6 +641,10 @@ DELETE FROM applied_types WHERE addr = 0x140001BD0;
 -- Re-decompile to see effect
 SELECT decompile(0x140001BD0, 1);
 ```
+
+A prototype IDA guessed (from a PDB or auto-analysis) shows in `funcs.prototype` like any
+other, but it is not yours yet: the decompiler may rewrite it, for example widening an `int`
+return to `__int64`. Writing the text back, even unchanged, makes it your type and keeps it.
 
 `applied_types` point lookup is intentionally write-friendly: `WHERE addr = X`
 returns one mapped row even when no declaration is applied yet, with `decl`,

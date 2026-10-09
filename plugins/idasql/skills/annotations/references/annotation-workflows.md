@@ -116,7 +116,7 @@ Discover existing analyst breadcrumbs and consolidate them:
 
 ```sql
 -- Find functions with TODO comments already present
-SELECT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) AS func_name,
+SELECT (SELECT name FROM funcs WHERE addr = func_addr) AS func_name,
        printf('0x%X', addr) AS addr,
        comment
 FROM pseudocode

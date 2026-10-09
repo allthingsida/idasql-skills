@@ -1,6 +1,6 @@
 ---
 name: decompiler
-description: "Decompile and analyze IDA functions. Use when asked for pseudocode, ctree AST analysis, local variables, labels, or decompiler-driven cleanup."
+description: "Decompile and analyze IDA functions. Use when asked for pseudocode, ctree AST analysis, local variables, labels, split expressions, or decompiler-driven cleanup."
 metadata:
   argument-hint: "[function-name or address]"
 allowed-tools:
@@ -9,6 +9,8 @@ allowed-tools:
   - Glob
   - Grep
 ---
+
+> **Links:** when an answer names functions, addresses, strings or types, make them clickable on IDA 9.4 builds: `[name](uri)` from the `deep_links` table, outside code blocks (skill `deep-links`).
 
 ---
 
@@ -19,6 +21,7 @@ Use this skill when user asks for:
 - pseudocode understanding or AST-level analysis
 - local variable semantics in decompiled form
 - decompiler-centric pattern mining (returns/calls/conditions)
+- "split expression": a merged `*(_QWORD *)&x = 0x...LL` store printed field by field
 
 Route to:
 - `annotations` for persistent comments/renames after interpretation
@@ -69,6 +72,15 @@ Without this, decompiler tables may decompile every function and become extremel
   - Confirm target `func_addr` exists and refresh decompile cache (`decompile(addr, 1)` where supported).
 - Mutation did not appear:
   - Run mandatory mutation loop (read -> edit -> refresh -> verify).
+- A `decompiler_splits` write failed:
+  - "piece_size must be 1, 2, 4 or 8": give bytes, not IDA's internal size code.
+  - "is not the start of an instruction" / "is not in the function at": take `addr` from the
+    merged assignment (`ctree.addr` of the `cot_asg`), and `func_addr` from `funcs`.
+  - "is already split": `UPDATE decompiler_splits SET piece_size = ...` or `DELETE` it.
+  - "unrecognised split state version" / "verified on IDA 9.0-9.4 only": this IDA stores split
+    data in a form idasql does not know; use the pseudocode window's Split expression instead.
+- A split row exists but the pseudocode did not change: nothing at that `addr` was merged (or
+  it already prints in pieces that size); delete the row.
 
 ---
 
@@ -84,6 +96,11 @@ Without this, decompiler tables may decompile every function and become extremel
 
 **CRITICAL:** Always filter by `func_addr`. Without constraint, these tables will decompile EVERY function - extremely slow!
 
+`func_addr` is a function's **entry address** on every decompiler table: an address
+inside a function matches no row (as on the disassembly tables), and every row reports
+the entry. Rowids are stable per (function, item), so `OR` across functions and
+self-joins never drop or merge rows.
+
 ### pseudocode
 The `pseudocode` table is a structured line-by-line pseudocode with writable comments. **Use `decompile(addr)` to view pseudocode; use this table only for surgical edits (comments) or structured queries.**
 
@@ -92,13 +109,13 @@ The `pseudocode` table is a structured line-by-line pseudocode with writable com
 | `func_addr` | INT | No | Function address |
 | `line_num` | INT | No | Line number |
 | `line` | TEXT | No | Pseudocode text |
-| `addr` | INT | No | Corresponding assembly address (from COLOR_ADDR anchor) |
+| `addr` | INT | No | Corresponding assembly address (from COLOR_ADDR anchor); NULL for a line with no address (signature, blank or comment-only line) |
 | `comment` | TEXT | **Yes** | Decompiler comment at this addr |
 | `comment_placement` | TEXT | **Yes** | Comment placement: `semi` (inline, default), `block1` (above line) |
 
 Filter behavior:
 - `WHERE func_addr = X`: best performance; iterates pseudocode for one function only.
-- `WHERE addr = X`: decompiles only the containing function and returns matching lines for that EA.
+- `WHERE addr = X`: decompiles only the containing function and returns matching lines for that EA (a line in a tail shared by several functions is listed under each owner).
 - `WHERE line_num = N`: scans functions and returns rows at that line index; use only when you need cross-function line alignment.
 
 **Comment placements:** `semi` (after `;`), `block1` (own line above), `block2`, `curly1`, `curly2`, `brace1`, `brace2`, `colon`, `case`, `else`, `do`, `asm`, `try`. An unrecognized placement string is silently coerced to `semi`.
@@ -151,7 +168,7 @@ Use this recipe before writing heading-style decompiler notes.
 
 Rules:
 - Do not assume `addr == func_addr`.
-- The first displayed pseudocode row often has `addr = 0` and is not the right write target.
+- The first displayed pseudocode row (the signature) has `addr` NULL and is not a write target.
 - One `addr` can map to multiple rows (`{`, statement, `}`); prefer a unique non-brace anchor.
 - For true function comments, update `funcs.comment` / `funcs.rpt_comment` instead of `pseudocode`.
 
@@ -160,12 +177,12 @@ Rules:
 SELECT line_num, addr, line
 FROM pseudocode
 WHERE func_addr = 0x401000
-  AND addr != 0
+  AND addr IS NOT NULL
   AND TRIM(line) NOT IN ('{', '}')
   AND addr IN (
     SELECT addr
     FROM pseudocode
-    WHERE func_addr = 0x401000 AND addr != 0
+    WHERE func_addr = 0x401000 AND addr IS NOT NULL
     GROUP BY addr
     HAVING COUNT(*) = 1
   )
@@ -181,12 +198,12 @@ WHERE func_addr = 0x401000
     SELECT addr
     FROM pseudocode
     WHERE func_addr = 0x401000
-      AND addr != 0
+      AND addr IS NOT NULL
       AND TRIM(line) NOT IN ('{', '}')
       AND addr IN (
         SELECT addr
         FROM pseudocode
-        WHERE func_addr = 0x401000 AND addr != 0
+        WHERE func_addr = 0x401000 AND addr IS NOT NULL
         GROUP BY addr
         HAVING COUNT(*) = 1
       )
@@ -251,6 +268,8 @@ Mutation guidance:
 - Prefer `idx`-based updates for deterministic writes.
 - `type` accepts scalars, pointers, **and array types** — e.g. `SET type = 'WCHAR[6]'` or `'_BYTE[392]'` for wide stack strings / fixed buffers (the type must fit the local's stack slot).
 - `comment` updates map to Hex-Rays local-variable comments (`lv.cmt`) and appear in `decompile(...)` output.
+- A `type` UPDATE is read back: when Hex-Rays keeps the old type the UPDATE fails ("Hex-Rays kept ...") and nothing is left changed. The result variable (`is_result = 1`, often unnamed) usually follows the function prototype that way, so change the return type with `UPDATE funcs SET prototype = ...`. Its `comment` is writable.
+- A rename can re-order the function's locals (IDA 9.2 does this for register arguments), so the next edit should re-select its `idx` (or address the variable by `mreg` / `stkoff`) rather than reuse an `idx` read before the rename.
 
 ### ctree_labels
 Decompiler control-flow labels. Supports UPDATE (`name`) and mirrors label facilities on `cfunc_t`.
@@ -261,8 +280,43 @@ Decompiler control-flow labels. Supports UPDATE (`name`) and mirrors label facil
 | `label_num` | INT | R | Label number (`LABEL_<n>`) |
 | `name` | TEXT | RW | Current label name |
 | `item_id` | INT | R | Backing ctree item id for this label |
-| `item_addr` | INT | R | Address of label-bearing ctree item |
+| `item_addr` | INT | R | Address of label-bearing ctree item (NULL when the item has none) |
 | `is_user_defined` | INT | R | 1 if name differs from default `LABEL_<n>` |
+
+### decompiler_splits
+Hex-Rays "Split expression" without a pseudocode window (the window's Split/Unsplit expression;
+`vdui_t::split_item` in `hexrays.hpp`). A row keeps the decompiler from merging narrower
+operations into one wider one at `addr`, so a struct initialised by one 8-byte store prints
+field by field.
+
+| Column | Type | RW | Description |
+|--------|------|----|-------------|
+| `func_addr` | INT | R | Function entry (optional on INSERT: the function containing `addr`) |
+| `addr` | INT | R | The merged instruction: the `addr` of the assignment in `ctree` |
+| `piece_size` | INT | RW | Bytes per piece: 1, 2, 4 or 8 |
+
+- `INSERT INTO decompiler_splits(addr, piece_size)` splits; `UPDATE ... SET piece_size` changes
+  it; `DELETE` unsplits. The next `decompile(addr)` shows it.
+- IDA's own action splits an 8-byte store into 4-byte pieces first, then 2, then 1.
+- Saved with the database, stored exactly as IDA's own Split expression stores it (a split made
+  in the GUI shows here, and the reverse), and rolled back by `checkpoints`.
+- A split where nothing merges changes nothing. Supported on IDA 9.0-9.4; other versions, and
+  split data in a form idasql does not recognise, are refused and never rewritten.
+- `WHERE func_addr = X` reads one function; a full scan reads every function's stored settings
+  without decompiling.
+
+```sql
+-- Before: *(_QWORD *)a1 = 0x600000001LL;
+SELECT printf('0x%X', addr) AS addr FROM ctree
+WHERE func_addr = 0x1400010A0 AND op_name = 'cot_asg';
+
+INSERT INTO decompiler_splits(addr, piece_size) VALUES (0x1400010AA, 4);
+SELECT decompile(0x1400010A0);   -- *(_DWORD *)a1 = 1; *((_DWORD *)a1 + 1) = 6;
+
+UPDATE decompiler_splits SET piece_size = 2 WHERE addr = 0x1400010AA;
+DELETE FROM decompiler_splits WHERE addr = 0x1400010AA;   -- merged again
+SELECT func_addr, addr, piece_size FROM decompiler_splits WHERE func_addr = 0x1400010A0;
+```
 
 ### ctree_call_args
 Flattened call arguments for easy querying.
@@ -285,6 +339,156 @@ Flattened call arguments for easy querying.
 | `arg_obj_name` | TEXT | Object name when the argument is a global object |
 | `arg_num_value` | INT | Numeric value |
 | `arg_str_value` | TEXT | String value |
+
+### microcode
+
+Hex-Rays **microcode** — the low-level 3-operand IR one layer *below* the ctree
+(assembly → **microcode** → ctree → pseudocode), lifted at `MMAT_LVARS` by default
+(lvar-aware, SSA-like). `ctree` is the AST; `microcode` is the register-transfer IR under
+it. **Always filter by `func_addr`** — each query runs one `gen_microcode` per function
+(~3 ms), so an unfiltered scan decompiles the whole program. The value must be
+the exact function start; an interior EA matches no rows. Read-only.
+
+A function Hex-Rays cannot lift has **no rows** on every path, so a join or an `IN`
+list over many functions keeps going past it. `SELECT microcode_error(func_addr)`
+(or `microcode_error(func_addr, 'generated')` for a rung) gives the reason, NULL when
+it lifts.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `func_addr` | INT | Containing function |
+| `block_num` | INT | Microcode basic-block serial |
+| `seq` | INT | Instruction index within the function |
+| `addr` | INT | Source EA (NULL for a synthetic micro-instruction) |
+| `opcode` | INT | Raw `mcode_t` opcode value |
+| `canonical_op` | TEXT | Cross-tool canonical P-code-style op (`INT_ADD`, `CALL`, `LOAD`, …); empty when the mcode has no clean canonical |
+| `maturity` | TEXT | Returned Hex-Rays lifting rung (`generated`…`lvars`; see below) |
+| `stage` | TEXT | Coarse cross-tool ordinal; idasql microcode emits `raw`\|`optimized`\|`final` (it is SSA-like, never the explicit-`ssa` stage other tools use) |
+| `text` | TEXT | Full rendered micro-instruction (e.g. `sub ecx2.4{1}, #1.4, ecx3.4{2}`) |
+| `l_text` | TEXT | Rendered left operand (empty when void) |
+| `r_text` | TEXT | Rendered right operand (empty when void) |
+| `d_text` | TEXT | Rendered destination operand (empty when void) |
+
+```sql
+-- The microcode of one function, in order
+SELECT block_num, seq, opcode, canonical_op, text
+FROM microcode WHERE func_addr = 0x401000 ORDER BY seq;
+
+-- Call micro-instructions (m_call = 0x38 / m_icall) in a function
+SELECT seq, text FROM microcode
+WHERE func_addr = 0x401000 AND text LIKE 'call%';
+```
+
+##### Maturity control (`WHERE maturity=…`)
+
+By default `microcode` is lifted at `MMAT_LVARS` (`stage='final'`). Add
+`AND maturity='<rung>'` to **re-lift the same function at a lower rung** — raw
+pre-optimization microcode (`generated`) has ~9× more ops than the optimized `lvars` form.
+The ladder (8 rungs), returned by `ir_maturities`:
+
+| `maturity` | `stage` | `ordinal` | `is_default` |
+|---|---|---|---|
+| `generated` | `raw` | 0 | 0 |
+| `preoptimized` | `optimized` | 1 | 0 |
+| `locopt` | `optimized` | 2 | 0 |
+| `calls` | `optimized` | 3 | 0 |
+| `glbopt1` | `optimized` | 4 | 0 |
+| `glbopt2` | `optimized` | 5 | 0 |
+| `glbopt3` | `optimized` | 6 | 0 |
+| `lvars` | `final` | 7 | 1 |
+
+`maturity` is a **passthrough** filter: it pushes down to the generator and through
+`ir_ops`. `=`, `IN`, `LIKE`, `<`, `<=`, `>` and `>=` each lift exactly the rungs whose
+**name** satisfies the predicate (names compare as text, as in SQL: for ladder order,
+pick the names from `ir_maturities` by `ordinal`). For `<>` or `NOT ...`, list the
+wanted rungs with `IN`: those operators reach the table only as the default rung.
+A requested rung returns rows only when Hex-Rays produces that exact rung; if Hex-Rays coerces the request, no non-matching rows
+leak through. Without a maturity constraint, rows report the rung Hex-Rays
+actually returned.
+
+```sql
+-- Raw pre-optimization microcode of one function (many more ops than the default)
+SELECT seq, opcode, canonical_op, text
+FROM microcode WHERE func_addr = 0x401000 AND maturity = 'generated' ORDER BY seq;
+
+-- Discover the available lifting ladder
+SELECT maturity, stage, ordinal, is_default, is_ssa FROM ir_maturities ORDER BY ordinal;
+```
+
+#### microcode_operands (5-kind operand model)
+
+Structured operand rows — one per non-void `minsn_t` `l`/`r`/`d` slot. The five
+portable value kinds are `reg`, `imm`, `mem`, `var`, and `result`; native
+structural operands such as block/case references are retained with an empty
+`kind`. Join back to `microcode` on `op_seq = seq`. Same
+`func_addr`/`maturity` pushdown. Read-only.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `func_addr` | INT | Containing function |
+| `op_seq` | INT | The owning micro-instruction's `seq` (joins `microcode.seq`) |
+| `operand_index` | INT | Slot order within the instruction |
+| `role` | TEXT | `in` (`l`/`r`) or `out` (`d`) |
+| `kind` | TEXT | `reg` \| `imm` \| `mem` \| `var` \| `result` (empty for structural operands) |
+| `text` | TEXT | Rendered operand |
+| `value` | INT | Immediate value (NULL unless an `imm`) |
+| `size` | INT | Operand size in bytes |
+| `maturity` / `stage` | TEXT | Same as `microcode` |
+
+```sql
+-- Immediate operands consumed in a function
+SELECT op_seq, operand_index, value, text
+FROM microcode_operands
+WHERE func_addr = 0x401000 AND kind = 'imm' AND role = 'in' ORDER BY op_seq;
+```
+
+#### Cross-tool low-IR: `ir_ops` / `ir_v_*` / `ir_operands` / `ir_maturities` views
+
+`ir_ops` is the **canonical low-IR projection** over `microcode`: `func_addr`, `seq`,
+`addr`, `op` (canonical P-code-style op — `INT_ADD`, `CALL`, `LOAD`, …, or NULL where the
+mcode has no clean canonical), `native_op` (the native microcode mnemonic), `is_ssa`
+(0 — MMAT_LVARS microcode is SSA-like but not explicit SSA), the passthrough
+**`maturity`** filter, and the returned **`stage`** classification. `stage` is
+not a lifting selector: use `maturity` to request a rung, then use `stage` only
+to classify/filter returned rows. The same `ir_ops` shape holds on every family
+tool, so portable SQL can compare IR across engines.
+
+The `ir_v_*` **semantic views** preserve the portable four-column schema and
+classify the default-maturity op stream (`func_addr`, `seq`, `addr`, `op`):
+`ir_v_calls`, `ir_v_mem_writes`, `ir_v_mem_reads`, `ir_v_branches`, `ir_v_arith`.
+**`ir_operands`** is the portable projection of `microcode_operands` (`func_addr`,
+`op_seq`, `operand_index`, `role`, `kind`, `text`, `value`, `size`). Its portable
+eight-column schema has no maturity coordinate, so it is fixed to the default
+`lvars` rung. Join it only to default-maturity `ir_ops` on
+`func_addr` + `op_seq = seq`. **`ir_maturities`** advertises the lifting ladder.
+
+```sql
+-- Canonical op stream for one function
+SELECT seq, op, native_op FROM ir_ops WHERE func_addr = 0x401000 ORDER BY seq;
+
+-- Memory writes performed by a function (engine-agnostic)
+SELECT seq, addr FROM ir_v_mem_writes WHERE func_addr = 0x401000 ORDER BY seq;
+
+-- Each op with its operands (engine-agnostic)
+SELECT o.seq, o.op, p.role, p.kind, p.text
+FROM ir_ops o JOIN ir_operands p ON p.func_addr = o.func_addr AND p.op_seq = o.seq
+WHERE o.func_addr = 0x401000 AND o.maturity = 'lvars'
+ORDER BY o.seq, p.operand_index;
+
+-- A non-default rung is IDASQL-native: constrain both native surfaces and
+-- include maturity in the join because portable ir_operands has no such column.
+SELECT o.seq, o.canonical_op, p.role, NULLIF(p.kind, '') AS kind, p.text
+FROM microcode o JOIN microcode_operands p
+  ON p.func_addr = o.func_addr AND p.op_seq = o.seq AND p.maturity = o.maturity
+WHERE o.func_addr = 0x401000
+  AND o.maturity = 'generated' AND p.maturity = 'generated'
+ORDER BY o.seq, p.operand_index;
+```
+
+Always scope `ir_ops`/`ir_v_*`/`ir_operands` by an exact function-start
+`func_addr`; it pushes down to the microcode generator. `maturity` pushes down
+through `ir_ops`, but the four-column `ir_v_*` views and eight-column
+`ir_operands` intentionally expose only the default rung.
 
 ---
 
@@ -375,6 +579,7 @@ Preferred SQL write surface for function metadata:
 | `ctree` | Generator | `func_addr` | Lazy streaming, never materializes full result, respects LIMIT |
 | `ctree_lvars` | Cached | `func_addr` | Lazy per-function cache, freed after query |
 | `ctree_call_args` | Generator | `func_addr` | Lazy streaming, respects LIMIT |
+| `decompiler_splits` | Cached | `func_addr` | Stored settings only, no decompilation; a full scan is cheap |
 
 **Critical rules:**
 - **ALL decompiler tables require `func_addr` constraint.** Without it, every function is decompiled.

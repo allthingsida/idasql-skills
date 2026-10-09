@@ -1,6 +1,6 @@
 ---
 name: annotations
-description: "Edit IDA databases. Use when asked to add comments, rename symbols, apply types, create bookmarks, or clean up decompiled code for review."
+description: "Edit IDA databases. Use when asked to add comments, rename symbols, apply types, create bookmarks, write the database notepad, clean up decompiled code for review, or take undo checkpoints and roll edits back."
 allowed-tools:
   - Bash
   - Read
@@ -19,6 +19,8 @@ Use this skill when user asks to:
 - rename symbols or local variables
 - apply types/enums/struct representations
 - create/update bookmarks for investigation workflow
+- read or write the database notepad (session notes that travel with the IDB)
+- checkpoint before a batch of edits, undo an agent turn, or roll back / redo edits
 - make pseudocode read more like source
 - prepare decompiled code for side-by-side review against source
 - annotate a function end-to-end, not just add one comment
@@ -97,7 +99,7 @@ Why the summary is mandatory:
 
 ## Folder-Aware Annotation Workflow
 
-Use object-table `folder_path` columns to organize work as you annotate. Prefer `funcs.folder_path` for function-level work, `names.folder_path` for globals/labels, and `bookmarks.folder_path` for review breadcrumbs. `dirtree_entries` is the raw browser and `dirtree_folders` manages empty folders across all standard IDA dirtrees.
+Use object-table `folder_path` columns to organize work as you annotate. Prefer `funcs.folder_path` for function-level work, `names.folder_path` for globals/labels, and `bookmarks.folder_path` for review breadcrumbs. `dirtree_entries` is the raw browser and `dirtree_folders` manages empty folders across all standard IDA dirtrees. `dirtree_entries.path` is absolute (`/idasql/review`); `dirtree_folders.path` and `folder_path` are relative (`idasql/review`); both compare exactly like SQL.
 
 Common folders:
 - `idasql/review/needs-types`
@@ -354,6 +356,38 @@ For canonical schema and owner mapping, see `../connect/references/schema-catalo
 
 ---
 
+## notepad (the database notepad)
+
+`notepad` is IDA's "Database notepad": one free-text note per database, saved inside the IDB. Use it for a human-readable summary of an analysis session that should travel with the database.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `text` | TEXT | Writable. The notepad text, line ends shown as LF; `''` when empty |
+| `size` | INT | Read-only. Bytes as stored (CRLF line ends), without the terminating NUL |
+
+```sql
+-- Read it
+SELECT text FROM notepad;
+
+-- Replace it (written with CRLF line ends, as IDA's notepad window does)
+UPDATE notepad SET text = 'Session notes' || char(10) || '- entry point reviewed';
+
+-- Append a line
+UPDATE notepad SET text = text || char(10) || '- crypto routine at 0x401000';
+
+-- Clear it (the row stays, with empty text)
+DELETE FROM notepad;
+```
+
+Rules:
+- There is always exactly one row; `INSERT` is refused.
+- Text above 1,024,000 bytes (with CRLF line ends and the terminating NUL, the most IDA's notepad window holds) is refused, and so are NULL and NUL bytes. A refused UPDATE leaves the notepad unchanged.
+- In the GUI, an open notepad window shows the new text at IDA's next UI refresh (about a tenth of a second) and **loses anything typed there but not yet saved**. Say so before overwriting a user's notepad, and prefer appending.
+- The window stores what is typed in it when it closes or loses focus and when the database is saved (`save_database()` included). A window that closes before that refresh writes its own text back over the UPDATE, so read the notepad back after writing it while the user has it open.
+- Like every write, it reaches the IDB file only when the database is saved (`save_database()` or `-w`).
+
+---
+
 ## Editing Local Variables (Rename, Retype, Comment)
 
 The `ctree_lvars` table is the editing surface for decompiler local variables. Writable columns: `name`, `type`, `comment`. For full table schema, see `decompiler` skill.
@@ -362,6 +396,8 @@ Local-variable edit guidance:
 - Inspect/select one deterministic `idx`, then update by `func_addr + idx`.
 - Use `UPDATE ctree_lvars SET name = ...`, `type = ...`, or `comment = ...` for local edits.
 - For old name-based workflows, first query the candidate rows by `func_addr + name`, choose one `idx`, then update by `idx`.
+- A `type` UPDATE is read back and fails ("Hex-Rays kept ...") when the decompiler keeps the old type. That is usual for the result variable (`is_result = 1`), whose type follows the function prototype: change the return type with `UPDATE funcs SET prototype = ...` instead. Its `comment` is writable like any other.
+- Hex-Rays may re-order a function's locals after a rename, so re-select by `idx` (or by `mreg`/`stkoff`) before the next edit instead of reusing an old `idx`.
 
 ```sql
 -- Inspect current locals before renaming
@@ -509,6 +545,69 @@ For per-operand numform control (`set_numform*`, `get_numform*`), see `decompile
 
 ---
 
+## Undo Checkpoints (Roll Edits Back)
+
+A checkpoint is a named IDA undo point. Take one before a batch of edits; if the edits were wrong,
+roll back to it; if the rollback was wrong, redo. It needs no IDAPython and works headless and in
+the GUI. Every idasql write rolls back: names, comments, prototypes, types, members, enums, folders,
+bookmarks, segments, bytes, operand formats, `make_code`, netnodes, lvars, pseudocode comments,
+callee types, the notepad, and `ida_config` keys with `persisted = 1`.
+
+```sql
+INSERT INTO checkpoints(label) VALUES ('before renames');
+UPDATE funcs SET name = 'parse_header' WHERE addr = 0x401000;
+SELECT seq, label, kind, writes_since, state FROM checkpoints ORDER BY seq;
+UPDATE checkpoints SET state = 'undone' WHERE label = 'before renames';   -- roll back
+UPDATE checkpoints SET state = 'live' WHERE label = 'before renames';     -- redo
+SELECT next_undo_label, next_redo_label, redo_safe FROM undo_state;
+```
+
+| Column | Meaning |
+|--------|---------|
+| `seq` | Creation order (the rowid) |
+| `label` | Unique among live checkpoints; omitted on INSERT: `checkpoint N`. Empty and `auto#...` labels are refused |
+| `created_at` | ISO time |
+| `kind` | `user` (INSERT) or `auto` (`auto_checkpoint`) |
+| `writes_since` | Changes made after it that are still applied (a count of changes, not rows). 0: rolling back changes nothing |
+| `statement` | For `auto`: the statement that wrote; NULL for `user` |
+| `state` | `live` or `undone`. Writable: `'undone'` rolls back to it (newer checkpoints too), `'live'` redoes the next undone one |
+
+Rules:
+- **Session-scoped.** Checkpoints live in IDA's undo history: they survive `save_database()`, not
+  closing the database, so they need a long-lived session (the plugin, `--http`, `--mcp`, `-i`).
+- **Rollback takes everything since the checkpoint**, GUI and IDAPython edits included
+  (`undo_state.last_rollback_foreign` says how many such steps it undid). A WHERE that matches no
+  checkpoint undoes nothing. A checkpoint IDA no longer has (history trimmed, or undone outside
+  idasql) fails, and the database is left as it was.
+- **Redo** is one checkpoint at a time, oldest first, and is **refused once anything was written after
+  the rollback**: IDA would re-apply the old step and silently drop the newer change. Reads,
+  decompiling included, do not count. Check `undo_state.redo_safe` first.
+- **SQLite `ROLLBACK` is not undo.** It does not revert IDA writes and does not remove a checkpoint.
+- **Session settings are not database state.** `runtime_settings` and `ida_config` keys with
+  `persisted = 0` are not rolled back.
+- `DELETE FROM checkpoints` is refused. Needs IDA 9.0 SP1 or later: on IDA 9.0 GA, creating a
+  checkpoint and `auto_checkpoint = 'statement'` fail with that reason.
+
+Per-statement undo: every top-level statement that writes gets its own checkpoint (`kind = 'auto'`,
+label `auto#N`). SQL issued from Python through `import idasql` belongs to the statement that ran
+the Python, and right after a rollback, reads do not create one (that would end the redo branch).
+While it is on, idasql keeps one undo point ready for the next statement: `undo_state.next_undo_label`
+can name an `auto#N` not listed yet (it is listed once a statement writes), and a rollback past it
+counts it as one step.
+
+```sql
+UPDATE runtime_settings SET value = 'statement' WHERE key = 'auto_checkpoint';
+UPDATE funcs SET comment = 'reviewed' WHERE addr = 0x401000;
+UPDATE checkpoints SET state = 'undone'
+WHERE seq = (SELECT MAX(seq) FROM checkpoints WHERE state = 'live');      -- undo the last statement
+UPDATE runtime_settings SET value = 'off' WHERE key = 'auto_checkpoint';
+```
+
+Per-turn checkpoints for an agent session (a prompt-submit hook that checkpoints every turn, with
+`rollback` / `redo` / `list` / `status` commands): [references/checkpoints.md](references/checkpoints.md).
+
+---
+
 ## Mandatory Mutation Loop (For All Edits)
 
 > Follow the read -> edit -> refresh -> verify cycle defined in `connect` Global Agent Contracts.
@@ -537,6 +636,7 @@ When editing many functions or annotations, keep these costs in mind:
 ## Additional Resources
 
 - For full cleanup workflows, bulk annotation patterns, and complete worked examples: [references/annotation-workflows.md](references/annotation-workflows.md)
+- Per-turn undo for agent sessions (the hook script, `/rewind` workflow): [references/checkpoints.md](references/checkpoints.md)
 
 ---
 

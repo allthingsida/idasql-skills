@@ -156,3 +156,10 @@ If `get_ui_context_json()` cannot run:
 - Do not treat `binary` output as UI context.
 - Do not fabricate selection/address fields when absent.
 - Do not recapture repeatedly in one answer unless user asks for refresh.
+
+---
+
+## See also
+
+- `deep-links` — the other direction: move the user's IDA to a result
+  (`SELECT ida_open_link(...)`), and make answers clickable with `[name](uri)` links.

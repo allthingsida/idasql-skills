@@ -140,7 +140,7 @@ Find functions that compare the same variable against multiple constants — the
 -- Functions with many numeric comparisons (enum candidate detection)
 WITH comparisons AS (
     SELECT func_addr,
-           (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) AS func_name,
+           (SELECT name FROM funcs WHERE addr = func_addr) AS func_name,
            num_value
     FROM ctree
     WHERE func_addr IN (SELECT addr FROM funcs LIMIT 200)

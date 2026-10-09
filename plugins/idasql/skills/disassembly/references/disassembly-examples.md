@@ -16,7 +16,7 @@ Fingerprint functions by their instruction mix -- useful for finding similar fun
 -- Top 10 most "complex" functions by unique mnemonic count
 WITH mnemonic_profile AS (
     SELECT func_addr,
-           (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) AS func_name,
+           (SELECT name FROM funcs WHERE addr = func_addr) AS func_name,
            COUNT(DISTINCT mnemonic) AS unique_mnemonics,
            COUNT(*) AS total_insns
     FROM instructions
@@ -41,7 +41,7 @@ Hub functions that call many different APIs are often dispatchers, init routines
 -- Functions calling the most distinct callees
 WITH callee_counts AS (
     SELECT func_addr,
-           (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) AS func_name,
+           (SELECT name FROM funcs WHERE addr = func_addr) AS func_name,
            COUNT(DISTINCT callee_name) AS unique_callees
     FROM disasm_calls
     WHERE callee_name IS NOT NULL AND callee_name != ''
@@ -75,7 +75,7 @@ call_counts AS (
     SELECT func_addr AS addr, COUNT(*) AS n_calls
     FROM disasm_calls GROUP BY func_addr
 )
-SELECT (SELECT name FROM funcs WHERE i.addr >= addr AND i.addr < end_addr LIMIT 1) AS name,
+SELECT (SELECT name FROM funcs WHERE addr = i.addr) AS name,
        printf('0x%X', i.addr) AS addr,
        COALESCE(b.n_blocks, 0) AS blocks,
        i.n_insns AS insns,
@@ -110,12 +110,34 @@ WHERE rank <= 3
 ORDER BY seg, rank;
 ```
 
+### Name library code first (FLIRT), then triage the rest
+
+Runtime and library functions recognized by a FLIRT signature are named and flagged as
+library code (`FUNC_LIB`, `flags & 4`); leave them out of triage.
+
+```sql
+-- Which signatures are applied, and which could apply?
+SELECT name, title, state, matches FROM signatures;
+SELECT name, title, modules FROM available_signatures WHERE NOT is_startup AND NOT in_list
+  AND name LIKE 'vc32%' AND title LIKE 'Microsoft VisualC%';
+
+-- Apply one, then compare library code with the program's own
+INSERT INTO signatures(name) VALUES ('vc32rtf');
+SELECT (flags & 4) != 0 AS library, COUNT(*) AS functions, SUM(size) AS bytes
+FROM funcs GROUP BY library;
+
+-- Triage anchors among the program's own functions only
+SELECT name, printf('0x%X', addr) AS addr, size FROM funcs
+WHERE NOT (flags & 4) ORDER BY size DESC LIMIT 20;
+```
+
 ## In-Context Learning Playbooks
 
 Use these prompt-to-SQL templates in agent sessions:
 
 ```sql
 -- 1) Safe instruction lifecycle at one EA
+-- (fails with "re-created by auto-analysis" when other code still flows into it)
 SELECT addr, disasm FROM instructions WHERE addr = 0x401000;
 DELETE FROM instructions WHERE addr = 0x401000;
 SELECT make_code(0x401000);
@@ -130,6 +152,7 @@ SELECT COUNT(*) FROM instructions WHERE addr >= 0x401000 AND addr < 0x401100;
 -- 3) Function-scoped lifecycle
 SELECT COUNT(*) FROM instructions WHERE func_addr = 0x401000;
 DELETE FROM instructions WHERE func_addr = 0x401000;
-SELECT make_code_range(addr, end_addr) FROM funcs WHERE addr = 0x401000;
+-- recreate every chunk (end_addr would cover the entry chunk only)
+SELECT SUM(make_code_range(chunk_start, chunk_end)) AS created FROM function_chunks WHERE func_addr = 0x401000;
 SELECT COUNT(*) FROM instructions WHERE func_addr = 0x401000;
 ```

@@ -44,6 +44,17 @@ WHERE calling_conv = 'fastcall' AND return_is_ptr = 1;
 
 ## Extended Common Query Patterns
 
+### Library Code vs the Program's Own (FLIRT)
+
+```sql
+-- Apply the runtime signature that fits, then split the function list
+INSERT INTO signatures(name) VALUES ('vc32rtf');
+SELECT (flags & 4) != 0 AS library, COUNT(*) AS functions FROM funcs GROUP BY library;
+
+-- Largest functions that no signature recognized
+SELECT name, size FROM funcs WHERE NOT (flags & 4) ORDER BY size DESC LIMIT 20;
+```
+
 ### Security: Dangerous Function Calls with Stack Buffers
 
 ```sql
@@ -59,7 +70,7 @@ ORDER BY f.name;
 ### Find Zero Comparisons (Potential Error Checks)
 
 ```sql
-SELECT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) as func, printf('0x%X', addr) as addr
+SELECT (SELECT name FROM funcs WHERE addr = func_addr) as func, printf('0x%X', addr) as addr
 FROM ctree_v_comparisons
 WHERE op_name = 'cot_eq' AND rhs_op = 'cot_num' AND rhs_num = 0;
 ```
@@ -76,7 +87,7 @@ ORDER BY f.name;
 ### malloc with Constant Size
 
 ```sql
-SELECT (SELECT name FROM funcs WHERE c.func_addr >= addr AND c.func_addr < end_addr LIMIT 1) as func, a.arg_num_value as size
+SELECT (SELECT name FROM funcs WHERE addr = c.func_addr) as func, a.arg_num_value as size
 FROM ctree_v_calls c
 JOIN ctree_call_args a ON a.func_addr = c.func_addr AND a.call_item_id = c.item_id
 WHERE c.callee_name LIKE '%malloc%'
@@ -251,7 +262,7 @@ SELECT
     s.name as segment,
     COUNT(*) as data_refs
 FROM funcs f
-JOIN xrefs x ON x.from_addr BETWEEN f.addr AND f.end_addr
+JOIN xrefs x ON x.from_func = f.addr
 JOIN segments s ON x.to_addr BETWEEN s.start_addr AND s.end_addr
 WHERE s.class = 'DATA' AND x.is_code = 0
 GROUP BY f.addr, s.name
@@ -262,14 +273,12 @@ LIMIT 20;
 ### Exception Handler Detection
 
 ```sql
-SELECT
-    f.name,
-    COUNT(*) as chunk_count,
-    SUM(fc.size) as total_size
-FROM funcs f
-JOIN fchunks fc ON fc.owner = f.addr
-GROUP BY f.addr
-HAVING COUNT(*) > 1
+-- Functions with multiple chunks (often exception handlers or cold paths).
+-- funcs.chunk_count counts every chunk, shared tails included; fchunks.owner
+-- names only a tail's primary owner, so grouping fchunks by owner undercounts.
+SELECT name, chunk_count, size AS total_size
+FROM funcs
+WHERE chunk_count > 1
 ORDER BY chunk_count DESC;
 ```
 
@@ -363,7 +372,7 @@ WITH RECURSIVE callers AS (
     JOIN disasm_calls dc ON dc.callee_addr = c.func_addr
     WHERE c.depth < 5
 )
-SELECT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) as caller, MIN(depth) as distance
+SELECT (SELECT name FROM funcs WHERE addr = func_addr) as caller, MIN(depth) as distance
 FROM callers
 GROUP BY func_addr
 ORDER BY distance, caller;
@@ -500,25 +509,25 @@ WHERE length > 5;
 
 ```sql
 -- Comprehensive security audit in one query
-SELECT 'dangerous_func' as check_type, (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) as location, callee_name as detail
+SELECT 'dangerous_func' as check_type, (SELECT name FROM funcs WHERE addr = func_addr) as location, callee_name as detail
 FROM disasm_calls
 WHERE callee_name IN ('strcpy', 'strcat', 'sprintf', 'gets', 'scanf')
 
 UNION ALL
 
-SELECT 'crypto_usage', (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1), callee_name
+SELECT 'crypto_usage', (SELECT name FROM funcs WHERE addr = func_addr), callee_name
 FROM disasm_calls
 WHERE callee_name LIKE '%Crypt%' OR callee_name LIKE '%AES%' OR callee_name LIKE '%RSA%'
 
 UNION ALL
 
-SELECT 'network_call', (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1), callee_name
+SELECT 'network_call', (SELECT name FROM funcs WHERE addr = func_addr), callee_name
 FROM disasm_calls
 WHERE callee_name IN ('socket', 'connect', 'send', 'recv', 'WSAStartup')
 
 UNION ALL
 
-SELECT 'registry_access', (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1), callee_name
+SELECT 'registry_access', (SELECT name FROM funcs WHERE addr = func_addr), callee_name
 FROM disasm_calls
 WHERE callee_name LIKE 'Reg%'
 
@@ -547,7 +556,7 @@ FROM funcs f
 WHERE EXISTS (
     SELECT 1 FROM xrefs x
     JOIN strings s ON x.to_addr = s.addr
-    WHERE x.from_addr BETWEEN f.addr AND f.end_addr
+    WHERE x.from_func = f.addr
 );
 ```
 
@@ -568,17 +577,13 @@ ORDER BY f.size DESC;
 
 ### Function complexity dashboard
 
-Combine CFG edges with block counts and call metrics for a complexity overview:
+`func_summary` already combines CFG edges, block counts and call metrics per function:
 
 ```sql
-SELECT f.name, f.size,
-       (SELECT COUNT(*) FROM blocks b WHERE b.func_addr = f.addr) as blocks,
-       (SELECT COUNT(*) FROM cfg_edges ce WHERE ce.func_addr = f.addr) as edges,
-       (SELECT COUNT(*) FROM disasm_calls dc WHERE dc.func_addr = f.addr) as calls_made,
-       (SELECT COUNT(*) FROM disasm_loops dl WHERE dl.func_addr = f.addr) as loops
-FROM funcs f
-WHERE f.size > 32
-ORDER BY edges DESC
+SELECT name, size, block_count, edge_count, cyclomatic, call_sites_out, loop_count
+FROM func_summary
+WHERE size > 32
+ORDER BY edge_count DESC
 LIMIT 20;
 ```
 

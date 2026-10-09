@@ -22,7 +22,7 @@ This skill is a **comprehensive catalog** of every idasql SQL function. Use it t
 | `disasm(addr)` | Single disassembly line at address |
 | `disasm(addr, n)` | Next N instructions from address (count-based, not boundary-aware) |
 | `disasm_range(start, end)` | All disassembly lines in address range [start, end) |
-| `disasm_func(addr)` | Full disassembly of function containing address |
+| `disasm_func(addr)` | Full disassembly of the function containing address: every chunk, entry first, with a `; ---------- tail chunk <start>-<end> (of <name>) ----------` line before each tail |
 | `make_code(addr)` | Create instruction at address (returns 1 if already code or created) |
 | `make_code_range(start, end)` | Create instructions in [start, end), returns number created |
 
@@ -107,16 +107,16 @@ LIMIT 10;
 SELECT printf('0x%llX', addr) AS addr
 FROM byte_search
 WHERE pattern = 'CC CC CC'
-ORDER BY addr
+ORDER BY byte_search.addr
 LIMIT 1;
 ```
 
 **Optimization Pattern:**
 ```sql
 -- Count unique functions containing RDTSC (opcode: 0F 31)
-SELECT COUNT(DISTINCT f.addr) as count
+SELECT COUNT(DISTINCT fa.func_addr) as count
 FROM byte_search b
-JOIN funcs f ON b.addr >= f.addr AND b.addr < f.end_addr
+JOIN func_at(b.addr) fa
 WHERE b.pattern = '0F 31';
 ```
 
@@ -126,12 +126,30 @@ WHERE b.pattern = '0F 31';
 
 Use table lookups for address and containing-function metadata. Resolve symbol names to integer EAs before using these patterns.
 
+Functions are not always contiguous: a function can own tail chunks outside its
+entry chunk, and one tail can belong to several functions. `funcs.end_addr` ends the
+**entry chunk** only, so never check containment with an `addr`..`end_addr` range.
+`func_at(addr)` is a table-valued function returning `func_addr`, `name`,
+`chunk_start`, `chunk_end`, `is_tail`: one row per owning function, no rows outside
+any function. Column details: the `disassembly` skill.
+
 | Pattern | Description |
 |---------|-------------|
 | `SELECT name FROM names WHERE addr = :addr LIMIT 1` | Name at address |
-| `SELECT name FROM funcs WHERE :addr >= addr AND :addr < end_addr LIMIT 1` | Function containing address |
-| `SELECT addr FROM funcs WHERE :addr >= addr AND :addr < end_addr LIMIT 1` | Start of containing function |
-| `SELECT end_addr FROM funcs WHERE :addr >= addr AND :addr < end_addr LIMIT 1` | End of containing function |
+| `SELECT name FROM func_at(:addr)` | Function(s) containing address (tail chunks included; one row per owner) |
+| `SELECT func_addr FROM func_at(:addr)` | Entry address of the containing function(s) |
+| `SELECT chunk_start, chunk_end, is_tail FROM func_at(:addr)` | The chunk containing the address |
+| `(SELECT name FROM func_at(x.from_addr) LIMIT 1)` | Containing function as a correlated scalar |
+| `(SELECT name FROM funcs WHERE addr = :func)` | Name of a function whose entry you already have (`func_addr`, `from_func`) |
+| `EXISTS (SELECT 1 FROM func_at(:addr) WHERE func_addr = f.addr)` | Does function `f` contain the address? |
+| `SELECT chunk_count, size FROM funcs WHERE addr = :func` | Chunk count and total size (all chunks) |
+| `SELECT * FROM function_chunks WHERE func_addr = :func` | Every chunk of a function |
+
+```sql
+SELECT name, is_tail FROM func_at(0x401000);
+SELECT printf('0x%X', chunk_start) AS start_hex, printf('0x%X', chunk_end) AS end_hex, is_tail
+FROM function_chunks WHERE func_addr = 0x401000 ORDER BY is_tail, chunk_start;
+```
 
 Function count and index lookup are table-driven:
 
@@ -247,7 +265,7 @@ Preferred SQL write surface for function metadata:
 
 Runtime guard:
 ```sql
-PRAGMA idasql.enable_idapython = 1;
+UPDATE runtime_settings SET value='1' WHERE key='enable_idapython';
 ```
 
 ```sql
@@ -267,6 +285,23 @@ SELECT idapython_snippet('counter = globals().get("counter", 0) + 1; print(count
 ```sql
 SELECT get_ui_context_json();
 ```
+
+---
+
+## Deep Links (IDA 9.4 builds)
+
+| Function | Description |
+|----------|-------------|
+| `ida_open_link(uri)` | Open an `ida://` link in IDA: in the GUI plugin, in-process; elsewhere, in the running IDA 9.4 that has the database open. Returns 1 or an error with the reason. Gated by `enable_deep_link_navigation` (ON in the plugin, OFF in the CLI). Never launches IDA |
+
+```sql
+-- In the GUI plugin this navigates; under the idasql CLI it returns an error until
+-- enable_deep_link_navigation is on and an IDA 9.4 has the database open.
+SELECT ida_open_link(dl.uri) FROM deep_links dl
+WHERE dl.resource = 'functions' AND dl.addr = 0x401130 AND dl.view = 'pseudocode';
+```
+
+Links themselves come from the `deep_links` table, not from a function: see the `deep-links` skill.
 
 ---
 
@@ -292,24 +327,24 @@ FROM instructions
 WHERE func_addr = 0x401000
 LIMIT 10;
 
-SELECT opnum, text, type_code, type_name, value
+SELECT operand_index, text, type_code, type_name, value
 FROM instruction_operands
 WHERE addr = 0x401000
-ORDER BY opnum;
+ORDER BY operand_index;
 
-SELECT i.addr, i.itype, i.mnemonic, i.size, o.opnum, o.text, o.type_name, o.value
+SELECT i.addr, i.itype, i.mnemonic, i.size, o.operand_index, o.text, o.type_name, o.value
 FROM instructions i
 LEFT JOIN instruction_operands o
   ON o.addr = i.addr AND o.addr = 0x401000
 WHERE i.addr = 0x401000
-ORDER BY o.opnum;
+ORDER BY o.operand_index;
 ```
 
 ---
 
 ## Decompilation
 
-> **Hex-Rays required.** Every function in this section (`decompile`, `call_arg_addrs`,
+> **Hex-Rays required.** Every function in this section (`decompile`, `microcode_error`, `call_arg_addrs`,
 > the `set_union_selection*` / `get_union_selection*` families, `call_arg_item`,
 > `ctree_item_at`, and the `set_numform*` / `get_numform*` families) is only registered
 > when the Hex-Rays decompiler is available. On a build/runtime without Hex-Rays they are
@@ -320,6 +355,7 @@ ORDER BY o.opnum;
 |----------|-------------|
 | `decompile(addr)` | **PREFERRED** — Full pseudocode with line prefixes |
 | `decompile(addr, 1)` | Force re-decompilation (use after writes/renames) |
+| `microcode_error(func_addr[, maturity])` | Why Hex-Rays cannot lift a function (at a rung; default `lvars`), NULL when it lifts. Such a function has no `microcode` rows |
 | `call_arg_addrs(call_addr)` | JSON array of persisted argument-loader instruction EAs |
 | `set_union_selection(func_addr, addr, path)` | Set/clear union selection path at EA |
 | `set_union_selection_item(func_addr, item_id, path)` | Set/clear union selection path by `ctree.item_id` |

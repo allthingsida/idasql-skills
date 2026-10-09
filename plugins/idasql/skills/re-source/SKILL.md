@@ -135,7 +135,7 @@ FROM ctree WHERE func_addr = 0x401000
 **b) Cross-function correlation — find more fields:**
 ```sql
 -- Find all callers that pass the same struct pointer
-SELECT DISTINCT (SELECT name FROM funcs WHERE dc.func_addr >= addr AND dc.func_addr < end_addr LIMIT 1) as caller
+SELECT DISTINCT (SELECT name FROM funcs WHERE addr = dc.func_addr) as caller
 FROM disasm_calls dc
 WHERE dc.callee_addr = 0x401000;
 
@@ -250,7 +250,7 @@ WITH callers_of AS (
 ),
 offset_accesses AS (
     SELECT func_addr,
-           (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) AS func_name,
+           (SELECT name FROM funcs WHERE addr = func_addr) AS func_name,
            num_value AS field_offset,
            op_name
     FROM ctree
@@ -285,7 +285,7 @@ WITH offset_funcs AS (
       AND num_value BETWEEN 1 AND 0x1000
     GROUP BY func_addr
 )
-SELECT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) AS name,
+SELECT (SELECT name FROM funcs WHERE addr = func_addr) AS name,
        printf('0x%X', func_addr) AS addr,
        offset_accesses,
        unique_offsets

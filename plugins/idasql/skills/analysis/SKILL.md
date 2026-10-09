@@ -10,6 +10,8 @@ allowed-tools:
   - Grep
 ---
 
+> **Links:** when an answer names functions, addresses, strings or types, make them clickable on IDA 9.4 builds: `[name](uri)` from the `deep_links` table, outside code blocks (skill `deep-links`).
+
 ## Additional Resources
 
 - For crypto/network detection patterns: [references/crypto-detection.md](references/crypto-detection.md), [references/network-detection.md](references/network-detection.md)
@@ -47,7 +49,11 @@ SELECT * FROM binary;
 -- 2) Capability hints from imports
 SELECT module, name FROM imports ORDER BY module, name;
 
--- 3) Behavioral hints from strings
+-- 3) Library code recognized by FLIRT signatures (leave it out of triage);
+--    apply more from available_signatures when runtime code is still unnamed
+SELECT name, title, matches FROM signatures;
+
+-- 4) Behavioral hints from strings
 SELECT content, printf('0x%X', addr) AS addr
 FROM strings
 WHERE length >= 8
@@ -58,6 +64,7 @@ LIMIT 40;
 Interpretation guidance:
 - Crypto/network/process APIs + suspicious strings usually indicate highest-value functions to inspect first.
 - Move from "signals" to "functions" via `xrefs`/`disasm_calls`, then decompile likely hotspots.
+- Rank only the program's own functions: `funcs WHERE NOT (flags & 4)` leaves out library code a signature recognized (the `disassembly` skill: "signatures (FLIRT)").
 
 ---
 
@@ -114,7 +121,7 @@ Non-goal:
 ### "What does this binary do?"
 
 ```sql
--- Entry points
+-- Entry points / exports
 SELECT * FROM entries;
 
 -- Imported APIs (hints at functionality)
@@ -128,7 +135,7 @@ SELECT content FROM strings WHERE length > 10 ORDER BY length DESC LIMIT 20;
 
 ```sql
 -- Dangerous string functions
-SELECT DISTINCT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) FROM disasm_calls
+SELECT DISTINCT (SELECT name FROM funcs WHERE addr = func_addr) FROM disasm_calls
 WHERE callee_name IN ('strcpy', 'strcat', 'sprintf', 'gets');
 
 -- Crypto-related
@@ -166,13 +173,13 @@ SELECT name, type, size FROM ctree_lvars WHERE func_addr = 0x401000;
 SELECT callee_name FROM disasm_calls WHERE func_addr = 0x401000;
 
 -- What calls it
-SELECT (SELECT name FROM funcs WHERE from_addr >= addr AND from_addr < end_addr LIMIT 1) FROM xrefs WHERE to_addr = 0x401000 AND is_code = 1;
+SELECT (SELECT name FROM func_at(from_addr) LIMIT 1) FROM xrefs WHERE to_addr = 0x401000 AND is_code = 1;
 ```
 
 ### "Find all uses of a string"
 
 ```sql
-SELECT s.content, (SELECT name FROM funcs WHERE x.from_addr >= addr AND x.from_addr < end_addr LIMIT 1) as function, printf('0x%X', x.from_addr) as location
+SELECT s.content, (SELECT name FROM func_at(x.from_addr) LIMIT 1) as function, printf('0x%X', x.from_addr) as location
 FROM strings s
 JOIN xrefs x ON s.addr = x.to_addr
 WHERE s.content LIKE '%config%';
@@ -269,14 +276,26 @@ ORDER BY return_count DESC LIMIT 20;
 
 ## Common Query Patterns
 
+### Triage Dashboard (one row per function, no decompiler)
+
+`func_summary` ranks every function by the usual triage signals in one query: size,
+blocks, cyclomatic complexity, call sites out and distinct callees, call sites in and
+distinct callers, loops, switches, data reads and writes, frame size and `uses_chkstk`
+(calls a stack probe: a big stack frame).
+
+```sql
+SELECT name, size, cyclomatic, call_sites_out, callers, loop_count, switch_count,
+       data_writes, frame_size
+FROM func_summary
+ORDER BY cyclomatic DESC
+LIMIT 20;
+```
+
 ### Find Most Called Functions
 
 ```sql
-SELECT f.name, COUNT(*) as callers
-FROM funcs f
-JOIN xrefs x ON f.addr = x.to_addr
-WHERE x.is_code = 1
-GROUP BY f.addr
+SELECT name, callers, call_sites_in
+FROM func_summary
 ORDER BY callers DESC
 LIMIT 10;
 ```
@@ -284,7 +303,7 @@ LIMIT 10;
 ### Find Functions Calling a Specific API
 
 ```sql
-SELECT DISTINCT (SELECT name FROM funcs WHERE from_addr >= addr AND from_addr < end_addr LIMIT 1) as caller
+SELECT DISTINCT (SELECT name FROM func_at(from_addr) LIMIT 1) as caller
 FROM xrefs
 WHERE to_addr = (SELECT addr FROM imports WHERE name = 'CreateFileW');
 ```
@@ -292,7 +311,7 @@ WHERE to_addr = (SELECT addr FROM imports WHERE name = 'CreateFileW');
 ### String Cross-Reference Analysis
 
 ```sql
-SELECT s.content, (SELECT name FROM funcs WHERE x.from_addr >= addr AND x.from_addr < end_addr LIMIT 1) as used_by
+SELECT s.content, (SELECT name FROM func_at(x.from_addr) LIMIT 1) as used_by
 FROM strings s
 JOIN xrefs x ON s.addr = x.to_addr
 WHERE s.content LIKE '%password%';
@@ -301,9 +320,8 @@ WHERE s.content LIKE '%password%';
 ### Function Complexity (by Block Count)
 
 ```sql
-SELECT (SELECT name FROM funcs WHERE func_addr >= addr AND func_addr < end_addr LIMIT 1) as name, COUNT(*) as block_count
-FROM blocks
-GROUP BY func_addr
+SELECT name, block_count, edge_count, cyclomatic
+FROM func_summary
 ORDER BY block_count DESC
 LIMIT 10;
 ```

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deep Links"
+  short_description: "Clickable ida:// links to IDA locations"
+  default_prompt: "Use $deep-links to turn functions, strings and types in the answer into clickable links that open IDA there."

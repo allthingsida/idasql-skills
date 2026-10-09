@@ -1,6 +1,6 @@
 ---
 name: idapython
-description: "Execute IDAPython via idasql. Use when SQL surfaces are insufficient and direct IDA SDK access is needed via Python snippets or scripts."
+description: "Execute IDAPython via idasql, and query idasql from IDAPython with import idasql. Use when SQL surfaces are insufficient and direct IDA SDK access is needed via Python snippets or scripts, or when a script or plugin inside IDA needs SQL over the open database."
 allowed-tools:
   - Bash
   - Read
@@ -22,7 +22,7 @@ allowed-tools:
 Python execution is disabled by default. Enable it with:
 
 ```sql
-PRAGMA idasql.enable_idapython = 1;
+UPDATE runtime_settings SET value='1' WHERE key='enable_idapython';
 ```
 
 Captured `print` output is **unbounded by default**. To bound a runaway or very
@@ -30,15 +30,19 @@ chatty snippet (so it can't exhaust memory / the response), set an optional byte
 `0` restores unbounded:
 
 ```sql
-PRAGMA idasql.idapython_output_max = 65536;  -- cap captured output at 64 KiB
-PRAGMA idasql.idapython_output_max = 0;      -- unbounded (default)
+UPDATE runtime_settings SET value='65536' WHERE key='idapython_output_max';  -- cap at 64 KiB
+UPDATE runtime_settings SET value='0'     WHERE key='idapython_output_max';  -- unbounded (default)
 ```
 
 Output past the cap is dropped with a `...[idapython output truncated at N bytes]...` marker.
 
-To confirm the current values of `enable_idapython` and `idapython_output_max` (and
-the other runtime controls), `SELECT * FROM runtime_settings WHERE scope = 'idasql'` —
-a read-only discovery view over the `PRAGMA idasql.*` surface. See the `connect` skill.
+To confirm the current values of `enable_idapython` and
+`idapython_output_max`, query
+`SELECT * FROM runtime_settings WHERE scope = 'idasql'`. The table is the
+canonical writable runtime-control surface: read it with `SELECT`, and change
+settable `value` cells with an exact-key `UPDATE`. Use
+`SELECT * FROM runtime_settings` to include shared controls. See the `connect`
+skill.
 
 ### Examples
 
@@ -50,14 +54,16 @@ SELECT idapython_snippet('counter = globals().get("counter", 0) + 1; print(count
 
 ### Notes
 
-- Disabled by default until pragma is enabled
+- Disabled by default until `enable_idapython` is enabled through
+  `runtime_settings`
 - Python exceptions propagate as SQL errors
 - `sandbox` isolates/persists Python globals by sandbox key
 
-### Two Python Contexts (Important)
+### Three Python Contexts (Important)
 
 - **Host-side Python client** (outside IDA): use `requests.post(.../query, data=sql)` to send SQL over HTTP. The body may be one statement or a semicolon-separated script; every response uses the canonical `results[]` envelope (a single statement is an array of one — read `results[i].rows`). Use this for loops, bulk updates, and automation orchestration. See `connect` skill HTTP client patterns.
 - **IDAPython via SQL** (inside IDA): use `idapython_snippet()` / `idapython_file()` when you need direct IDA SDK APIs in-process.
+- **SQL from IDAPython** (inside IDA): `import idasql` in the IDA console, a script, a plugin, or a snippet queries the open database in-process (below). Never call the HTTP server from Python running inside IDA: the request waits for IDA's main thread, which is busy running that Python, and the call deadlocks.
 
 Example contrast:
 
@@ -89,6 +95,73 @@ SELECT idapython_snippet('print(undefined_var)');
 
 ---
 
+## Calling idasql from Python (`import idasql`)
+
+Python that runs inside IDA (the console, a script or plugin, `idapython_snippet`) can query the open
+database directly. idasql injects a small `idasql` module through IDAPython; idasql itself does not
+link Python, and without IDAPython nothing changes.
+
+```python
+import idasql
+idasql.available()                                  # True when an idasql engine is loaded
+n = idasql.scalar("SELECT COUNT(*) FROM funcs")     # first cell of the first row, typed, or None
+r = idasql.query("SELECT addr, name, size FROM funcs WHERE size > ? ORDER BY size DESC", 100)
+for f in r:                                         # Row = tuple with attribute access
+    print(hex(f.addr), f.name, f.size)
+r.columns, r.rows, r.warnings, r.elapsed_ms, r.timed_out, r.partial
+r.dicts()                                           # list of dicts
+idasql.rows("SELECT * FROM segments")               # query(...).dicts()
+idasql.query("SELECT ? + ?", [40, 2])               # one list/tuple = the parameter sequence
+results = idasql.script("SELECT 1; SELECT 2 AS two") # several statements: one Result each
+try:
+    idasql.query("SELECT * FROM no_such_table")
+except idasql.Error as e:
+    print(e.message, e.sql)
+```
+
+| Value | Python type |
+|-------|-------------|
+| INTEGER | `int` (addresses come back as numbers) |
+| REAL | `float` |
+| TEXT | `str` (embedded NULs kept) |
+| BLOB | `bytes` |
+| NULL | `None` |
+
+Parameters (`?`) are bound by SQLite, never formatted into the SQL: a quote in a name is data.
+Python `int`, `float`, `str`, `bytes`, `bool` and `None` are accepted; integers up to 2^64-1 are
+passed as their signed 64-bit value (how SQL holds high addresses).
+
+Rules:
+
+- **Main thread only.** In the GUI a call from another Python thread is forwarded to IDA's main
+  thread and waits for it. Under idalib (`idasql` CLI, `--http`, `--mcp`) nothing services such a
+  request, so it fails at once with `idasql.Error` instead of hanging.
+- **SQL -> Python -> SQL works.** Inside `idapython_snippet`, `import idasql` queries the same
+  database; the inner query shares the outer statement's deadline and cancellation.
+- **Python -> SQL -> Python is refused.** `idapython_snippet` / `idapython_file` inside SQL issued
+  through `idasql` fail with a clear error: IDAPython is not re-entrant from there.
+- **Writes are writes.** Changes made through `idasql` are visible to every later query, roll back
+  with checkpoints (see the `annotations` skill), and count as writes for the checkpoint redo guard.
+- **Settings follow transactions.** `UPDATE runtime_settings` from Python under a read-only statement
+  takes effect at once; under a statement that writes, or inside `BEGIN`, when that commits.
+- **Lifetime.** When the database closes or the plugin unloads, a kept `idasql.query` raises
+  `idasql.Error`. A different module already imported as `idasql` is never replaced (the bridge
+  module carries `_idasql_bridge_version`).
+
+Inside a snippet:
+
+```sql
+UPDATE runtime_settings SET value='1' WHERE key='enable_idapython';
+SELECT idapython_snippet('
+import idasql
+big = idasql.query("SELECT addr, name FROM funcs WHERE size > ? ORDER BY size DESC LIMIT 5", 64)
+for f in big:
+    print(hex(f.addr), f.name)
+');
+```
+
+---
+
 ## When to Use IDAPython vs SQL
 
 | Use Case | Best Tool | Why |
@@ -111,9 +184,10 @@ SELECT idapython_snippet('print(undefined_var)');
 
 ```sql
 -- Enable Python execution first
-PRAGMA idasql.enable_idapython = 1;
+UPDATE runtime_settings SET value='1' WHERE key='enable_idapython';
 
 -- Run a script that collects custom metrics
+-- (in SQL this one is SELECT COUNT(*) FROM funcs WHERE flags & 4; prefer SQL when it can)
 SELECT idapython_snippet('
 import idautils, idc
 count = 0
@@ -139,7 +213,8 @@ for i in range(ida_idp.ph_get_regnames().__len__()):
 
 ### Bridge pattern: Python produces JSON, SQL processes it
 
-When you need Python's power for extraction but SQL's power for analysis:
+When you need Python's power for extraction but SQL's power for analysis (inside a Python script,
+`import idasql` does the same without the JSON round trip):
 
 ```sql
 -- Python extracts data as JSON

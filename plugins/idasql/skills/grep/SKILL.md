@@ -10,6 +10,8 @@ allowed-tools:
   - Grep
 ---
 
+> **Links:** when an answer names functions, addresses, strings or types, make them clickable on IDA 9.4 builds: `[name](uri)` from the `deep_links` table, outside code blocks (skill `deep-links`).
+
 `grep` is IDASQL's entity-search surface. Use it to discover named functions, labels, segments, structs, enums, and members before pivoting into xrefs, decompiler, or type work.
 
 ---
@@ -210,3 +212,12 @@ WHERE func_addr = (
   `grep` is the wrong surface; pivot to `strings`, decompiler tables, or other domain tables.
 - Need bytes/opcodes:
   use `byte_search` instead of `grep`.
+
+---
+
+## See Also
+
+- `xrefs` — who references a symbol once `grep` has found it.
+- `disassembly` — a found function's body, chunks and calls (`disasm_func`, `func_summary`).
+- `data` — string contents and byte patterns, which `grep` does not search.
+- `types` — a found type's members and declaration.
