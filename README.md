@@ -2,6 +2,12 @@
 
 Claude Code / Copilot CLI and Codex plugin packaging for [idasql](https://github.com/allthingsida/idasql), a [live SQL](https://github.com/0xeb/libxsql) interface to IDA Pro databases.
 
+<p align="center">
+  <a href="https://paypal.me/EliasBachaalany"><img alt="Donate with PayPal" src="https://img.shields.io/badge/Donate-PayPal-0070e0?style=for-the-badge&logo=paypal&logoColor=white"></a>
+  <a href="https://buymeacoffee.com/0xeb"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy_Me_a_Coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black"></a>
+  <a href="https://github.com/allthingsida/idasql-skills"><img alt="Star idasql-skills on GitHub" src="https://img.shields.io/github/stars/allthingsida/idasql-skills?style=for-the-badge&logo=github&label=Star&color=24292f"></a>
+</p>
+
 ## Prerequisites
 
 - **IDA Pro** installed with IDA's directory in your PATH
@@ -104,6 +110,16 @@ If you want to test directly from a checkout, keep the repo where it is and use 
 
 - [idasql](https://github.com/allthingsida/idasql): CLI and plugin
 - [libxsql](https://github.com/0xeb/libxsql): Core SQLite virtual table framework
+
+## Support
+
+If idasql and these skills save you time in IDA, a donation funds the next release, and a star helps other reverse engineers find them.
+
+<p>
+  <a href="https://paypal.me/EliasBachaalany"><img alt="Donate with PayPal" src="https://img.shields.io/badge/Donate-PayPal-0070e0?style=for-the-badge&logo=paypal&logoColor=white"></a>
+  <a href="https://buymeacoffee.com/0xeb"><img alt="Buy Me a Coffee" src="https://img.shields.io/badge/Buy_Me_a_Coffee-FFDD00?style=for-the-badge&logo=buymeacoffee&logoColor=black"></a>
+  <a href="https://github.com/allthingsida/idasql-skills"><img alt="Star idasql-skills on GitHub" src="https://img.shields.io/github/stars/allthingsida/idasql-skills?style=for-the-badge&logo=github&label=Star&color=24292f"></a>
+</p>
 
 ## Author
 
