@@ -1,4 +1,4 @@
 interface:
   display_name: "Deep Links"
-  short_description: "Clickable ida:// links to IDA locations"
-  default_prompt: "Use $deep-links to turn functions, strings and types in the answer into clickable links that open IDA there."
+  short_description: "Clickable IDA links for GUI-connected targets"
+  default_prompt: "Use $deep-links for clickable functions, strings and types on a GUI-connected target. For a known fully headless target, use plain names and addresses without querying or emitting deep links, without remarking on links or their omission."

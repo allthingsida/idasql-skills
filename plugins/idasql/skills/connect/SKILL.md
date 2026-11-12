@@ -11,7 +11,7 @@ allowed-tools:
 ## CLI Help (verbatim `idasql --help`)
 
 ```
-idasql v0.0.19 - SQL interface to IDA databases
+idasql v0.0.20 - SQL interface to IDA databases
 Copyright (c) 2024-2026 Elias Bachaalany
 
 Usage: idasql -s <file> [-q <query>] [-f <file>] [-i] [--export <file>]
@@ -34,9 +34,14 @@ Options:
   -h, --help           Show this help
   --version            Show version
 
-  idasql link <verb>   ida:// deep links (no database needed):
-                       open <uri> | list | status | register | unregister | source | config
-                       `idasql link --help` for details
+Commands (no database is opened; `idasql <command> --help` for details):
+  link <verb>               ida:// deep links: open | status | register | unregister | source | config
+  instances [--json]        running IDA instances and the databases they have open
+  rescue <db> [--kill]      save a copy of the database a stuck IDA has open
+  close <db|url>            end an IDA cleanly: --save or --discard
+  http start|stop <db|pid>  start or stop another IDA's HTTP server (needs remote on there)
+  mcp start|stop <db|pid>   the same for its MCP server
+  remote on|off <db|pid>    let other processes start/stop that IDA's servers
 
 Examples:
   idasql -s test.i64 -q "SELECT name, size FROM funcs LIMIT 10"
@@ -82,13 +87,93 @@ it. `.http start` / `.mcp start` with no port reuse the pinned host/port. Full g
 
 ---
 
+## Find a Running IDA (`idasql instances`)
+
+Before asking for a URL or opening a file yourself, look for the IDA the user already
+has open. No database is opened by this:
+
+```
+idasql instances --json
+```
+
+One object per running IDA:
+
+| Field | Meaning |
+|-------|---------|
+| `pid` | process id |
+| `host` | `gui` (an IDA window) or `idalib` (an `idasql -s` session) |
+| `idb_path`, `idb_name` | the database it has open |
+| `http` | its idasql HTTP server URL, or `null` when it serves none |
+| `http_auth` | `true`: the server needs a token. Ask the user for it (it is never listed) |
+| `mcp`, `mcp_auth` | the same for an MCP server |
+| `rescue` | `idasql rescue` can reach it |
+| `remote` | `true`: other processes may start/stop its servers (`idasql http start`, below). Only an IDA window has it; always `false` for `idalib` |
+| `idasql` | the idasql plugin (or session) is running there |
+| `ipc`, `responsive` | IDA 9.4+: found through IDA's own endpoint, and whether its UI answers |
+| `started` | when that idasql session started (UTC) |
+
+Choosing the target:
+
+1. The user named a database → the instance with that database.
+2. Otherwise pick the obvious one, in this order: the database named earlier in the
+   conversation; else the only GUI instance; else the most recently started. **Do not
+   stop to ask**: say which one you used (database and pid) in the answer, so the user
+   can correct you in one word.
+3. Retain its `host` as connection context for this target: `gui` permits deep links;
+   `idalib` is headless and gets plain names/addresses, with no deep-link queries.
+   Connect to its `http` URL as in "Attach to a Running Server" below, then confirm what
+   you are bound to before the first real answer:
+   ```sql
+   SELECT key, value FROM binary WHERE key IN ('filename', 'idb_path', 'sha256');
+   ```
+   `idb_path` tells apart two same-named databases; `sha256` tells whether two databases
+   analyse the same sample.
+
+Special cases:
+
+- `http` is `null` (an IDA window that serves no SQL): start its server yourself, then
+  connect to the URL it prints:
+  ```
+  idasql http start <pid>          # the same as `.http start` in that IDA
+  ```
+  Exit 4 means its remote control is off. When the user's request needs **that**
+  database, switch it on and start again. Never do this for a database the request is
+  not about:
+  ```
+  idasql remote on <pid>           # the same as `.remote on` in that IDA (saved in its database)
+  idasql http start <pid>
+  ```
+  **Always tell the user what you started and where** ("started HTTP in
+  quiet.i64, pid 19020, at http://127.0.0.1:8412"). That IDA also prints every request
+  in its Output window. `idasql http stop <pid>` stops it again. When the user works
+  with that database often, suggest `.pin http` there, so its server starts every time
+  it opens. `idasql mcp start|stop <pid>` does the same for MCP. A token is never handed
+  out: a server pinned with one reports `http_auth: true`, so ask the user for it.
+- `host` is `idalib` with `http` `null`: an `idasql -s` session with no server. It
+  cannot be started from outside; open your own `idasql -s` on a copy, or ask the user.
+- `responsive` is `false`: that IDA is hung or busy. Tell the user; if its unsaved work
+  must be kept, `idasql rescue "<idb_path>"` saves a copy (only when the user asks).
+- Nothing is listed: use a pasted URL (below), or `idasql -s <file>`.
+- `idasql instances --pid 1234[,5678]` lists only those processes.
+
+From a session you are already connected to, the same rows are a table, and the same
+requests are writes to it (one other IDA per statement; useful when you have SQL but no
+shell):
+
+```sql
+SELECT pid, host, idb_path, http, remote FROM ida_instances WHERE self = 0;
+UPDATE ida_instances SET remote = 1 WHERE pid = 19020;      -- only for a database the request is about
+UPDATE ida_instances SET start = 'http' WHERE pid = 19020;  -- then read its http column
+```
+
 ## Attach to a Running Server (pasted from IDA)
 
 When the request contains an idasql HTTP server URL — typically pasted from the
 clipboard after `.http start` in IDA, e.g.
 `idasql HTTP server at http://127.0.0.1:8134` followed by curl lines — the
-database is already open in a live IDA session. Talk to that server; do **not**
-start `idasql -s` yourself.
+database is already open in that server. Talk to it; do **not** start `idasql -s`
+yourself. A URL alone does not identify a GUI plugin: retain the supplied connection
+context, or resolve its own `host` in Session Bootstrap below.
 
 1. `curl <url>/help` first: the endpoints and how to discover the schema.
 2. Send SQL as the raw body of `POST <url>/query` with `--data-binary`. If the
@@ -97,9 +182,10 @@ start `idasql -s` yourself.
    header is missing or wrong.
 3. Run the Session Bootstrap orientation queries below over HTTP, then route to
    the domain skill for the task that followed the pasted text.
-4. Writes (`UPDATE`/`INSERT`/`DELETE`) change the database open in IDA
-   immediately, and the user sees them there. They are saved when the user
-   saves in IDA; `--write` does not apply.
+4. Writes (`UPDATE`/`INSERT`/`DELETE`) change that server's open database
+   immediately. In a GUI plugin the user sees them and saves in IDA; `--write`
+   does not apply there. A standalone headless server persists edits on exit
+   only if it was started with `--write`.
 
 ## Quick Start Guardrails
 
@@ -148,27 +234,38 @@ less-common surfaces.
 
 Use this exact startup flow before deep analysis:
 
-1. Connect to database (`-s`, `-i`, or `--http`), or attach to a running server (see above). `-s` accepts either an existing IDB
+1. Find the IDA the user has open (`idasql instances --json`, see above) and attach to its server
+   (start it with `idasql http start <pid>` when it serves none),
+   or connect to a database (`-s`, `-i`, or `--http`). `-s` accepts either an existing IDB
    (`.idb`/`.i64`) or a raw binary (`.exe`/`.dll`/firmware/etc.) — never pre-build an
    IDB with `idat`; let `idasql -s raw.exe` do it.
    If a legacy `.idb` upgrades and returns `status:"upgraded"`, restart with the
    JSON `reopen_with` path before running orientation.
-2. Run orientation query:
+2. Record connection mode per target. A background `idasql -s ... --http/--mcp`
+   process you launched is **headless**; HTTP/MCP transport does not imply a GUI.
+   A known IDA GUI plugin is **GUI-connected**. For an unknown pasted URL, query
+   `SELECT host FROM ida_instances WHERE self = 1;` once on that server, not
+   `WHERE self = 0` or an unrelated local instance list. Keep unknown mode plain.
+   Known fully headless targets: do not query `deep_links`, emit `ida://` links,
+   probe navigation, enable its gate, or suggest a handler; use names and addresses,
+   without remarking on links or their omission.
+   Re-evaluate only when the target/connection changes or the user asks to open a GUI.
+3. Run orientation query:
 ```sql
 SELECT * FROM binary;
 ```
-3. Validate key entities exist:
+4. Validate key entities exist:
 ```sql
 SELECT COUNT(*) AS funcs FROM funcs;
 SELECT COUNT(*) AS xrefs FROM xrefs;
 SELECT COUNT(*) AS strings FROM strings;
 ```
-4. Introspect schema for target surfaces before authoring complex SQL:
+5. Introspect schema for target surfaces before authoring complex SQL:
 ```sql
 PRAGMA table_xinfo(funcs);
 PRAGMA table_xinfo(xrefs);
 ```
-5. Route to domain skill using routing matrix below.
+6. Route to domain skill using routing matrix below.
 
 ---
 
@@ -222,7 +319,7 @@ text or a name.
 - **Selection** - decide *whether and how much* to surface from user intent. Answer questions directly ("biggest is `main`, 500 bytes"); show supporting rows only when they help the user verify; don't dump full tables unprompted; never surface data fetched only as an intermediate reasoning step.
 - **Fidelity** - when you *do* present code/data, show the real artifact (decompilation, actual rows), never a paraphrase.
 - **Mechanics** - the HTTP `/query` response is a JSON envelope (`{success, results:[{columns,rows,...}]}`). Consume it directly and render in your reply. Do **not** pipe responses through `python`/`jq` to pre-render a table - that discards the `success`/`elapsed_ms`/`error` fields and makes you reason over a lossy view. The CLI (`-q`/`-f`) already prints a table. Reserve `jq`/`python` for extracting a value to feed a later query. (For direct terminal/pipe use the server can emit `?format=text|csv|tsv`; as an agent, consume `json`.)
-- **Links** - on IDA 9.4 builds, make the functions, strings and types you name clickable: generate each link with the `deep_links` table (function links `view='pseudocode'`, addresses `view='disasm'`) and write it as `[exact_name](uri)` outside any code block (see the `deep-links` skill). Never hand-build an `ida://` string.
+- **Links** - only for a GUI-connected target on IDA 9.4+ builds, make the functions, strings and types you name clickable. Known fully headless targets (including background CLI servers you launched) get plain names and addresses: do not query `deep_links` or emit `ida://` links. For GUI-connected targets: generate each link with the `deep_links` table (function links `view='pseudocode'`, addresses `view='disasm'`) and write it as `[exact_name](uri)` outside any code block (see the `deep-links` skill). Never hand-build an `ida://` string.
 
 ---
 
@@ -232,6 +329,9 @@ Use this deterministic mapping for initial routing:
 
 | User intent | Primary skill | Typical first query |
 |-------------|---------------|---------------------|
+| find the IDA the user has open / which databases are open | `connect` | `idasql instances --json` (no database needed) |
+| query another open IDA that serves no SQL yet | `connect` | `idasql http start <pid>` (exit 4: `idasql remote on <pid>` first, only for the database the request is about) |
+| close an IDA (only when asked) / run an IDA action | `connect` | `idasql close <db\|url> --save` · `SELECT name, description, arg_spec FROM ui_actions WHERE kind <> 'raw'` · `UPDATE ui_actions SET args = '{"addr": 4198400}', run = 1 WHERE name = 'jump_to'` |
 | "what does this binary do?" / triage | `analysis` | `SELECT * FROM entries;` |
 | rank functions (biggest, most complex, most called) | `analysis` | `SELECT name, cyclomatic, call_sites_out, callers FROM func_summary ORDER BY cyclomatic DESC LIMIT 20;` |
 | disassembly, segments, instructions | `disassembly` | `SELECT * FROM funcs LIMIT 20;` |
@@ -254,8 +354,8 @@ Use this deterministic mapping for initial routing:
 | checkpoint / undo / redo edits, per-turn rollback | `annotations` | `INSERT INTO checkpoints(label) VALUES ('before edits');` then `UPDATE checkpoints SET state='undone' WHERE label='before edits';` |
 | SQL from a Python script or plugin inside IDA | `idapython` | `import idasql; idasql.query("SELECT name FROM funcs WHERE size > ?", 100)` |
 | live IDA UI context questions | `ui-context` | `SELECT get_ui_context_json();` (when available) |
-| clickable links to IDA locations / "open it in IDA" | `deep-links` | `SELECT uri FROM deep_links WHERE resource='functions' AND addr=0x... AND view='pseudocode';` (IDA 9.4 builds) |
-| IDA SDK-only logic not in SQL surfaces | `idapython` | `UPDATE runtime_settings SET value='1' WHERE key='enable_idapython'; SELECT idapython_snippet('print(...)');` |
+| clickable links to IDA locations / "open it in IDA" | `deep-links` | `SELECT uri FROM deep_links WHERE resource='functions' AND addr=0x... AND view='pseudocode';` (IDA 9.4+ builds) |
+| IDA SDK-only logic not in SQL surfaces | `idapython` | `UPDATE runtime_settings SET value='1' WHERE key='enable_idapython'; INSERT INTO idapython_runs(code) VALUES ('print(...)');` |
 | recursive source/structure recovery | `re-source` | start from function + recurse/handoff |
 
 When prompts span domains, execute in this order:
@@ -666,4 +766,4 @@ This keeps mutation scope explicit and predictable for both humans and agents.
 - `analysis` — first triage after connecting (`func_summary`, imports, strings, entries).
 - `grep` — find functions, labels, types and members by name before querying them.
 - `functions` — the SQL function catalog when you need a signature.
-- `deep-links` — make the functions and addresses you report clickable (IDA 9.4 builds).
+- `deep-links` — make functions and addresses clickable for GUI-connected targets (IDA 9.4+); known fully headless targets stay plain.

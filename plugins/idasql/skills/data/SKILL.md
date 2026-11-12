@@ -8,7 +8,7 @@ allowed-tools:
   - Grep
 ---
 
-> **Links:** when an answer names functions, addresses, strings or types, make them clickable on IDA 9.4 builds: `[name](uri)` from the `deep_links` table, outside code blocks (skill `deep-links`).
+> **Links:** for a GUI-connected target on IDA 9.4+ builds, make named functions, addresses, strings or types clickable. For a known fully headless target (including a background CLI server you launched), do not query `deep_links` or emit `ida://` links; use plain names and addresses, without remarking on links or their omission. For GUI targets: `[name](uri)` from the `deep_links` table, outside code blocks (skill `deep-links`).
 
 ---
 

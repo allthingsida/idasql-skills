@@ -1,6 +1,6 @@
 ---
 name: deep-links
-description: "Make IDA answers clickable with ida:// deep links. Use whenever an answer names functions, addresses, strings, types or imports the user may want to open in IDA; whenever query results carry a deep_links uri or an ida:// link, including rows the user pasted and wants turned into a table or list to click through; when asked for links, to 'show me' or 'open it in IDA'; or to jump the user's IDA to a result. Each link is written [exact_name](uri), outside code."
+description: "Make GUI-connected IDA answers clickable with ida:// deep links. Use for functions, addresses, strings, types or imports the user may want to open in IDA, pasted link results, or explicit navigation requests. For a known fully headless target, answer with plain names and addresses: no deep links, and no remark about links or their omission. Each link is written [exact_name](uri), outside code."
 allowed-tools:
   - Bash
   - Read
@@ -10,11 +10,24 @@ allowed-tools:
 
 ## The Contract (read first, apply every time)
 
+0. **Connection context comes first.** For a known fully headless target, do not
+   query `deep_links`, generate or emit `ida://` links, probe navigation, enable its
+   gate, or suggest registering a handler. Use plain symbol names and addresses, and do
+   not remark on links or on leaving them out: the answer simply has none.
+   A background `idasql -s ... --http/--mcp` process you launched is headless even
+   though it serves HTTP/MCP and exposes the deep-link tables. A plugin connection
+   in an IDA GUI is GUI-connected. Retain this fact per target; a URL or IDA 9.4+
+   alone proves neither. If context is unknown, query
+   `SELECT host FROM ida_instances WHERE self = 1;` on that target once (`gui` or
+   `idalib`); an unknown result means plain output, not speculative links. Do not
+   scan unrelated GUI instances to turn a known headless target into a link target.
+   An explicit later request to open a GUI is a new navigation action, not permission
+   to add links to ordinary headless answers.
 1. **Generate links only with SQL** — from `deep_links`, alone or joined to the
    table you are listing. Never assemble an `ida://` string by hand: the table
    validates the target and produces exactly IDA's own format. If `deep_links` is
    not in `pragma_table_list`, this idasql build has no deep links (they need
-   IDA 9.4): emit none.
+   IDA 9.4+): emit none.
 2. **Write each link as `[label](uri)`** in prose, a list or a table cell. The label is
    the exact symbol from the same row (`sub_401130`, `aCmdExe`), never a paraphrase and
    never "click here". Escape `[`, `]` and `|` in a label with a backslash. **Never**
@@ -58,7 +71,10 @@ SELECT uri FROM deep_links
 WHERE resource = 'functions' AND addr = 0x401130 AND view = 'pseudocode';
 ```
 
-Many links: JOIN, so each row feeds its own address in.
+Many links: JOIN, so each row feeds its own address in. For a query-only request,
+return the SQL without connecting or running session bootstrap. To explain how to
+show the result, say to render each returned name/URI pair as `[name](uri)` outside
+code, with its address beside it; no UI-context discovery is needed.
 
 ```sql
 SELECT f.name, f.addr, dl.uri
@@ -110,7 +126,7 @@ its target. `IN (...)` lists do not reach the table; JOIN against a list instead
 
 ```sql
 -- inside IDA (plugin HTTP/MCP): opens right there. The idasql CLI returns an error
--- until the gate below is on and an IDA 9.4 has the database open.
+-- until the gate below is on and an IDA 9.4+ GUI has the database open.
 SELECT ida_open_link(dl.uri) FROM deep_links dl
 WHERE dl.resource = 'functions' AND dl.addr = 0x401130 AND dl.view = 'pseudocode';
 ```
@@ -118,11 +134,11 @@ WHERE dl.resource = 'functions' AND dl.addr = 0x401130 AND dl.view = 'pseudocode
 - In the IDA plugin the gate `enable_deep_link_navigation` is on. Under the `idasql`
   CLI it is off; turn it on with
   `UPDATE runtime_settings SET value='1' WHERE key='enable_deep_link_navigation'`.
-  The CLI then steers the running IDA 9.4 that has the database open.
+  The CLI then steers the running IDA 9.4+ GUI that has the database open.
 - From a shell: `idasql link open -- 'ida:///...'` (quote it: `&` separates commands
   in every shell; in `cmd.exe` use double quotes). If no IDA has the database open,
   `link open` starts IDA on it, waits for analysis, then navigates.
-- `idasql link list` shows the running IDA 9.4 instances and their databases.
+- `idasql instances` shows the running IDAs and their databases (see the `connect` skill).
 
 ---
 
@@ -130,11 +146,11 @@ WHERE dl.resource = 'functions' AND dl.addr = 0x401130 AND dl.view = 'pseudocode
 
 | Symptom | Cause | Do |
 |---|---|---|
-| `deep_links` missing from `pragma_table_list` | idasql built for IDA before 9.4 | emit no links; say deep links need IDA 9.4 |
+| `deep_links` missing from `pragma_table_list` | idasql built for IDA before 9.4 | emit no links; say deep links need IDA 9.4+ |
 | `valid = 0`, "No function at address" | the address is not in a function | use `resource = 'addresses'` |
 | "is not compatible with entity type" | view not allowed for that resource | use the resource's `default_view` / `allowed_views` |
 | `ida_open_link`: "navigation is disabled" | CLI gate off | run the `UPDATE` above, if the user wants navigation |
-| "no running IDA 9.4 instance has X open" | nothing to steer | `idasql link open` (launches), or tell the user |
+| "no running IDA 9.4+ instance has X open" | nothing to steer | `idasql link open` (launches), or tell the user |
 | "several IDA instances have a matching database open" | same basename twice, neither the link's exact file | `--pid`, or close one |
 | "IDA PID N does not answer and may have this database open" | an IDA is busy (modal dialog, long script) | retry, `--pid`, or `--launch-anyway` |
 | "... looks open in another IDA (... .id0 exists)" | the database's unpacked `.id0` is next to it | close that IDA, or `--launch-anyway` |

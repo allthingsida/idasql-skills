@@ -10,12 +10,41 @@ allowed-tools:
 
 ---
 
-## Python Execution SQL Functions
+## Running IDAPython: the `idapython_runs` table
 
-| Function | Description |
-|----------|-------------|
-| `idapython_snippet(code[, sandbox])` | Execute Python snippet and return captured output text |
-| `idapython_file(path[, sandbox])` | Execute Python file and return captured output text |
+Each run is a row. `INSERT` runs the code (or a file) and records it; `SELECT` reads what it printed.
+
+```sql
+INSERT INTO idapython_runs(code) VALUES ('print("hello from idapython")');
+SELECT output, success, error FROM idapython_runs ORDER BY id DESC LIMIT 1;
+```
+
+| Column | Type | Meaning |
+|--------|------|---------|
+| `id` | INTEGER | Run number, increasing (newest = highest). Read the latest with `ORDER BY id DESC LIMIT 1`; `last_insert_rowid()` is not set |
+| `code` | TEXT | Python source to run (give exactly one of `code` / `path`) |
+| `path` | TEXT | A `.py` file to run instead |
+| `sandbox` | TEXT | Optional namespace key: the same key keeps its globals across runs, different keys are isolated; NULL = the default global namespace |
+| `show_output` | INTEGER | `0` (default): output is only captured. `1`: also shown in IDA's Output window. Set `1` when the user asked for the run; leave `0` for your own probes |
+| `output` | TEXT | Everything the run printed |
+| `success` | INTEGER | `1` ran to the end, `0` raised |
+| `error` | TEXT | The Python error (traceback), NULL on success |
+| `started` | TEXT | UTC start time, ISO 8601 |
+| `duration_ms` | INTEGER | How long the run took |
+
+- Only `code` / `path`, `sandbox` and `show_output` can be inserted; the run fills in the rest.
+- **A Python error fails the `INSERT`** with that error, and the run is still recorded (read its
+  `output` to see what it printed before failing).
+- The last 100 runs are kept, in memory, for this session. `DELETE FROM idapython_runs [WHERE ...]`
+  removes them.
+- `INSERT ... SELECT` runs the code once per source row.
+
+```sql
+INSERT INTO idapython_runs(path) VALUES ('C:/temp/script.py');
+INSERT INTO idapython_runs(code, sandbox) VALUES ('counter = globals().get("counter", 0) + 1; print(counter)', 'alpha');
+INSERT INTO idapython_runs(code, show_output) VALUES ('print("the user sees this in IDA too")', 1);
+SELECT id, success, substr(output, 1, 80) AS output FROM idapython_runs ORDER BY id DESC LIMIT 5;
+```
 
 ### Runtime Guard
 
@@ -26,7 +55,7 @@ UPDATE runtime_settings SET value='1' WHERE key='enable_idapython';
 ```
 
 Captured `print` output is **unbounded by default**. To bound a runaway or very
-chatty snippet (so it can't exhaust memory / the response), set an optional byte cap;
+chatty run (so it can't exhaust memory / the response), set an optional byte cap;
 `0` restores unbounded:
 
 ```sql
@@ -36,33 +65,25 @@ UPDATE runtime_settings SET value='0'     WHERE key='idapython_output_max';  -- 
 
 Output past the cap is dropped with a `...[idapython output truncated at N bytes]...` marker.
 
-To confirm the current values of `enable_idapython` and
-`idapython_output_max`, query
+`idapython_echo` (default `0`) shows **every** run's output in IDA's Output window, whatever its
+`show_output`:
+
+```sql
+UPDATE runtime_settings SET value='1' WHERE key='idapython_echo';
+```
+
+To confirm the current values of `enable_idapython`, `idapython_output_max` and
+`idapython_echo`, query
 `SELECT * FROM runtime_settings WHERE scope = 'idasql'`. The table is the
 canonical writable runtime-control surface: read it with `SELECT`, and change
 settable `value` cells with an exact-key `UPDATE`. Use
 `SELECT * FROM runtime_settings` to include shared controls. See the `connect`
 skill.
 
-### Examples
-
-```sql
-SELECT idapython_snippet('print("hello from idapython")');
-SELECT idapython_file('C:/temp/script.py');
-SELECT idapython_snippet('counter = globals().get("counter", 0) + 1; print(counter)', 'alpha');
-```
-
-### Notes
-
-- Disabled by default until `enable_idapython` is enabled through
-  `runtime_settings`
-- Python exceptions propagate as SQL errors
-- `sandbox` isolates/persists Python globals by sandbox key
-
 ### Three Python Contexts (Important)
 
 - **Host-side Python client** (outside IDA): use `requests.post(.../query, data=sql)` to send SQL over HTTP. The body may be one statement or a semicolon-separated script; every response uses the canonical `results[]` envelope (a single statement is an array of one — read `results[i].rows`). Use this for loops, bulk updates, and automation orchestration. See `connect` skill HTTP client patterns.
-- **IDAPython via SQL** (inside IDA): use `idapython_snippet()` / `idapython_file()` when you need direct IDA SDK APIs in-process.
+- **IDAPython via SQL** (inside IDA): `INSERT INTO idapython_runs(code | path)` when you need direct IDA SDK APIs in-process.
 - **SQL from IDAPython** (inside IDA): `import idasql` in the IDA console, a script, a plugin, or a snippet queries the open database in-process (below). Never call the HTTP server from Python running inside IDA: the request waits for IDA's main thread, which is busy running that Python, and the call deadlocks.
 
 Example contrast:
@@ -75,29 +96,31 @@ requests.post("http://127.0.0.1:8080/query", data="SELECT COUNT(*) FROM funcs")
 
 ```sql
 -- IDAPython (inside IDA): executes Python in IDA runtime
-SELECT idapython_snippet('import idaapi; print(idaapi.get_kernel_version())');
+INSERT INTO idapython_runs(code) VALUES ('import idaapi; print(idaapi.get_kernel_version())');
+SELECT output FROM idapython_runs ORDER BY id DESC LIMIT 1;
 ```
 
 ### Sandbox Behavior
 
 Each sandbox key creates an isolated Python namespace:
 - Variables set in one sandbox are not visible in another
-- The same sandbox key reuses its namespace across calls (state persists within a session)
+- The same sandbox key reuses its namespace across runs (state persists within a session)
 - Without a sandbox key, code runs in the default global namespace
 
 ### Error Propagation
 
-When a Python script raises an exception, it propagates as a SQL error:
+When a Python script raises an exception, the `INSERT` fails with it, and the run is recorded:
 ```sql
 -- This will return an error: "NameError: name 'undefined_var' is not defined"
-SELECT idapython_snippet('print(undefined_var)');
+INSERT INTO idapython_runs(code) VALUES ('print(undefined_var)');
+SELECT success, error FROM idapython_runs ORDER BY id DESC LIMIT 1;   -- 0, the traceback
 ```
 
 ---
 
 ## Calling idasql from Python (`import idasql`)
 
-Python that runs inside IDA (the console, a script or plugin, `idapython_snippet`) can query the open
+Python that runs inside IDA (the console, a script or plugin, an `idapython_runs` row) can query the open
 database directly. idasql injects a small `idasql` module through IDAPython; idasql itself does not
 link Python, and without IDAPython nothing changes.
 
@@ -136,23 +159,24 @@ Rules:
 - **Main thread only.** In the GUI a call from another Python thread is forwarded to IDA's main
   thread and waits for it. Under idalib (`idasql` CLI, `--http`, `--mcp`) nothing services such a
   request, so it fails at once with `idasql.Error` instead of hanging.
-- **SQL -> Python -> SQL works.** Inside `idapython_snippet`, `import idasql` queries the same
+- **SQL -> Python -> SQL works.** Inside an `idapython_runs` run, `import idasql` queries the same
   database; the inner query shares the outer statement's deadline and cancellation.
-- **Python -> SQL -> Python is refused.** `idapython_snippet` / `idapython_file` inside SQL issued
-  through `idasql` fail with a clear error: IDAPython is not re-entrant from there.
+- **Python -> SQL -> Python is refused.** An `idapython_runs` INSERT issued through `idasql` fails
+  with a clear error: IDAPython is not re-entrant from there.
 - **Writes are writes.** Changes made through `idasql` are visible to every later query, roll back
   with checkpoints (see the `annotations` skill), and count as writes for the checkpoint redo guard.
-- **Settings follow transactions.** `UPDATE runtime_settings` from Python under a read-only statement
-  takes effect at once; under a statement that writes, or inside `BEGIN`, when that commits.
+- **Settings follow transactions.** `UPDATE runtime_settings` from Python takes effect when the
+  statement that ran the Python commits (the run's `INSERT`, or the enclosing `BEGIN`); Python in the
+  same run already reads the new value.
 - **Lifetime.** When the database closes or the plugin unloads, a kept `idasql.query` raises
   `idasql.Error`. A different module already imported as `idasql` is never replaced (the bridge
   module carries `_idasql_bridge_version`).
 
-Inside a snippet:
+Inside a run:
 
 ```sql
 UPDATE runtime_settings SET value='1' WHERE key='enable_idapython';
-SELECT idapython_snippet('
+INSERT INTO idapython_runs(code) VALUES ('
 import idasql
 big = idasql.query("SELECT addr, name FROM funcs WHERE size > ? ORDER BY size DESC LIMIT 5", 64)
 for f in big:
@@ -174,7 +198,7 @@ for f in big:
 | UI automation | IDAPython | Opening views, navigating cursor, triggering IDA actions |
 | Existing scripts | IDAPython | Reuse existing `.py` scripts without rewriting in SQL |
 
-**General rule:** Start with SQL. If you find yourself wanting nested loops, recursive algorithms, or IDA APIs that aren't exposed via idasql, reach for `idapython_snippet()` as a bridge.
+**General rule:** Start with SQL. If you find yourself wanting nested loops, recursive algorithms, or IDA APIs that aren't exposed via idasql, reach for an `idapython_runs` INSERT as a bridge.
 
 ---
 
@@ -188,7 +212,7 @@ UPDATE runtime_settings SET value='1' WHERE key='enable_idapython';
 
 -- Run a script that collects custom metrics
 -- (in SQL this one is SELECT COUNT(*) FROM funcs WHERE flags & 4; prefer SQL when it can)
-SELECT idapython_snippet('
+INSERT INTO idapython_runs(code) VALUES ('
 import idautils, idc
 count = 0
 for func_addr in idautils.Functions():
@@ -202,7 +226,7 @@ print(f"Library functions: {count}")
 
 ```sql
 -- Example: get processor-specific register names
-SELECT idapython_snippet('
+INSERT INTO idapython_runs(code) VALUES ('
 import ida_idp
 for i in range(ida_idp.ph_get_regnames().__len__()):
     name = ida_idp.ph_get_regnames()[i]
@@ -218,7 +242,7 @@ When you need Python's power for extraction but SQL's power for analysis (inside
 
 ```sql
 -- Python extracts data as JSON
-SELECT idapython_snippet('
+INSERT INTO idapython_runs(code) VALUES ('
 import json, idautils, idc
 result = []
 for addr in idautils.Functions():
@@ -228,8 +252,9 @@ for addr in idautils.Functions():
 print(json.dumps(result))
 ');
 
--- Then process the JSON output in SQL using json_each()
--- (copy the output from above into the query)
+-- Then process the run's JSON output in SQL
+SELECT json_extract(j.value, '$.name') AS name, json_extract(j.value, '$.addr') AS addr
+FROM json_each((SELECT output FROM idapython_runs ORDER BY id DESC LIMIT 1)) AS j;
 ```
 
 ---

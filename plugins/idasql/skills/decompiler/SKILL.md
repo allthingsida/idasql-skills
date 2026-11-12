@@ -10,7 +10,7 @@ allowed-tools:
   - Grep
 ---
 
-> **Links:** when an answer names functions, addresses, strings or types, make them clickable on IDA 9.4 builds: `[name](uri)` from the `deep_links` table, outside code blocks (skill `deep-links`).
+> **Links:** for a GUI-connected target on IDA 9.4+ builds, make named functions, addresses, strings or types clickable. For a known fully headless target (including a background CLI server you launched), do not query `deep_links` or emit `ida://` links; use plain names and addresses, without remarking on links or their omission. For GUI targets: `[name](uri)` from the `deep_links` table, outside code blocks (skill `deep-links`).
 
 ---
 
@@ -77,7 +77,7 @@ Without this, decompiler tables may decompile every function and become extremel
   - "is not the start of an instruction" / "is not in the function at": take `addr` from the
     merged assignment (`ctree.addr` of the `cot_asg`), and `func_addr` from `funcs`.
   - "is already split": `UPDATE decompiler_splits SET piece_size = ...` or `DELETE` it.
-  - "unrecognised split state version" / "verified on IDA 9.0-9.4 only": this IDA stores split
+  - "unrecognised split state version" / "verified on IDA 9.0-9.5 only": this IDA stores split
     data in a form idasql does not know; use the pseudocode window's Split expression instead.
 - A split row exists but the pseudocode did not change: nothing at that `addr` was merged (or
   it already prints in pieces that size); delete the row.
@@ -237,7 +237,7 @@ Full Abstract Syntax Tree of decompiled code.
 | `num_value` | INT | Numeric literal |
 | `str_value` | TEXT | String literal |
 | `helper_name` | TEXT | Helper function name (`cot_helper`) |
-| `member_offset` | INT | Member offset (`cot_memptr`/`cot_memref`) |
+| `member_offset` | INT | 64-bit member offset (`cot_memptr`/`cot_memref`); NULL for other nodes |
 | `var_name` | TEXT | Variable name |
 | `var_is_stk` | INT | 1=variable is a stack variable |
 | `var_is_reg` | INT | 1=variable is a register variable |
@@ -300,7 +300,7 @@ field by field.
 - IDA's own action splits an 8-byte store into 4-byte pieces first, then 2, then 1.
 - Saved with the database, stored exactly as IDA's own Split expression stores it (a split made
   in the GUI shows here, and the reverse), and rolled back by `checkpoints`.
-- A split where nothing merges changes nothing. Supported on IDA 9.0-9.4; other versions, and
+- A split where nothing merges changes nothing. Supported on IDA 9.0-9.5; other versions, and
   split data in a form idasql does not recognise, are refused and never rewritten.
 - `WHERE func_addr = X` reads one function; a full scan reads every function's stored settings
   without decompiling.

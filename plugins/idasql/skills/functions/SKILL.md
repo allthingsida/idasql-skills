@@ -258,10 +258,8 @@ Preferred SQL write surface for function metadata:
 
 ## Python Execution
 
-| Function | Description |
-|----------|-------------|
-| `idapython_snippet(code[, sandbox])` | Execute Python snippet and return captured output text |
-| `idapython_file(path[, sandbox])` | Execute Python file and return captured output text |
+Not a function: IDAPython runs are rows of the writable `idapython_runs` table (columns, failure
+handling, `show_output` and `idapython_echo`: the `idapython` skill).
 
 Runtime guard:
 ```sql
@@ -269,9 +267,11 @@ UPDATE runtime_settings SET value='1' WHERE key='enable_idapython';
 ```
 
 ```sql
-SELECT idapython_snippet('print("hello from idapython")');
-SELECT idapython_file('C:/temp/script.py');
-SELECT idapython_snippet('counter = globals().get("counter", 0) + 1; print(counter)', 'alpha');
+INSERT INTO idapython_runs(code) VALUES ('print("hello from idapython")');
+SELECT output, success, error FROM idapython_runs ORDER BY id DESC LIMIT 1;
+INSERT INTO idapython_runs(path) VALUES ('C:/temp/script.py');
+INSERT INTO idapython_runs(code, sandbox) VALUES ('counter = globals().get("counter", 0) + 1; print(counter)', 'alpha');
+INSERT INTO idapython_runs(code, show_output) VALUES ('print("shown in IDA too")', 1);
 ```
 
 ---
@@ -288,15 +288,18 @@ SELECT get_ui_context_json();
 
 ---
 
-## Deep Links (IDA 9.4 builds)
+## Deep Links (IDA 9.4+ builds)
+
+For a known fully headless target, do not generate or emit links or probe navigation.
+Use plain names and addresses, without remarking on links or their omission; follow the per-target connection mode in `connect`.
 
 | Function | Description |
 |----------|-------------|
-| `ida_open_link(uri)` | Open an `ida://` link in IDA: in the GUI plugin, in-process; elsewhere, in the running IDA 9.4 that has the database open. Returns 1 or an error with the reason. Gated by `enable_deep_link_navigation` (ON in the plugin, OFF in the CLI). Never launches IDA |
+| `ida_open_link(uri)` | Open an `ida://` link in IDA: in the GUI plugin, in-process; elsewhere, in the running IDA 9.4+ GUI that has the database open. Returns 1 or an error with the reason. Gated by `enable_deep_link_navigation` (ON in the plugin, OFF in the CLI). Never launches IDA |
 
 ```sql
 -- In the GUI plugin this navigates; under the idasql CLI it returns an error until
--- enable_deep_link_navigation is on and an IDA 9.4 has the database open.
+-- enable_deep_link_navigation is on and an IDA 9.4+ GUI has the database open.
 SELECT ida_open_link(dl.uri) FROM deep_links dl
 WHERE dl.resource = 'functions' AND dl.addr = 0x401130 AND dl.view = 'pseudocode';
 ```

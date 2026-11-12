@@ -12,7 +12,7 @@ idasql link status              # who handles ida:// here
 
 - Clicking an `ida://` link (in a terminal that supports hyperlinks, a browser, a chat
   window) runs `idasql link open` with it.
-- If an IDA 9.4 has the database open, IDA jumps there. Otherwise idasql starts IDA on
+- If an IDA 9.4+ GUI has the database open, IDA jumps there. Otherwise idasql starts IDA on
   the database (`.i64` or `.idb` only), waits for auto-analysis (`--timeout <seconds>`,
   1 to 3600), then jumps.
 - It does not start a second IDA when a running instance does not answer (a modal
@@ -77,8 +77,12 @@ Two independent settings decide whether a link is clickable:
 - Clicking needs a registered handler for `ida://`.
 
 A line like this in a project's `CLAUDE.md` (or `AGENTS.md`) makes an agent use them
-without being asked: "When idasql results name functions, strings or types, render
-them as `[name](uri)` links from the `deep_links` table."
+without being asked: "For a GUI-connected idasql target, render named functions,
+strings and types as `[name](uri)` links from `deep_links`. For a known fully headless
+target, use plain names and addresses without querying or emitting deep links, without remarking on links or their omission."
+
+Handler setup is for a GUI workflow or an explicit request to open a GUI, not a
+bootstrap step for a headless connection.
 
 ## Terminals decide whether a click goes through
 

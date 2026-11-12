@@ -8,7 +8,7 @@ allowed-tools:
   - Grep
 ---
 
-> **Links:** when an answer names functions, addresses, strings or types, make them clickable on IDA 9.4 builds: `[name](uri)` from the `deep_links` table, outside code blocks (skill `deep-links`).
+> **Links:** for a GUI-connected target on IDA 9.4+ builds, make named functions, addresses, strings or types clickable. For a known fully headless target (including a background CLI server you launched), do not query `deep_links` or emit `ida://` links; use plain names and addresses, without remarking on links or their omission. For GUI targets: `[name](uri)` from the `deep_links` table, outside code blocks (skill `deep-links`).
 
 This skill is the **authoritative reference** for IDA's type system as exposed through idasql. For annotation workflows that use types, see `annotations`. For decompiler-specific type interactions (ctree, lvars, union selection, numform), see `decompiler`.
 
@@ -574,8 +574,9 @@ SELECT * FROM ancestors;
 
 ## Importing C Declarations (parse_decls)
 
-`parse_decls(text)` imports C declarations into the local type library. It is
-best for seeding related types, typedefs, enums, and whole declarations. For
+`parse_decls(text)` imports C declarations into the local type library, preserving
+the declared type names without symbol-name decoration (including function typedefs).
+It is best for seeding related types, typedefs, enums, and whole declarations. For
 small refinements to an existing recovered type, prefer `types_members` updates
 so the local type ordinal stays stable and existing references do not need to be
 rebuilt.

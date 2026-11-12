@@ -1,4 +1,4 @@
-# Deep-link URI grammar (IDA 9.4)
+# Deep-link URI grammar (IDA 9.4+)
 
 ```
 ida://<source>/<idb-name>/<resource>?<target>&view=<view>[&idb_path=<path>]

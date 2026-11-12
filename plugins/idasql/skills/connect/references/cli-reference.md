@@ -85,26 +85,101 @@ idasql -s database.i64 --export dump.sql --export-tables=funcs,segments
 | `-h, --help` | Show help |
 | `--version` | Show version |
 
-### `idasql link` (IDA 9.4 builds)
+### `idasql link` (IDA 9.4+ builds)
 
 Works with `ida://` deep links. It needs no `-s` database and never
 starts idalib, so it is also what a registered URL handler runs.
 
 | Command | What it does |
 |---------|--------------|
-| `idasql link open [--pid N] [--no-launch] [--skip-analysis] [--timeout S] [--ida-arg A]... -- <uri>` | Open the link in the running IDA 9.4 that has the database open. With none open, start IDA on it (found from the link's `idb_path`, or a configured source), wait for analysis, then navigate |
-| `idasql link list [--json]` | Running IDA 9.4 instances, their databases and analysis state |
+| `idasql link open [--pid N] [--no-launch] [--skip-analysis] [--timeout S] [--ida-arg A]... -- <uri>` | Open the link in the running IDA 9.4+ GUI that has the database open. With none open, start IDA on it (found from the link's `idb_path`, or a configured source), wait for analysis, then navigate |
 | `idasql link status [--json]` | Who handles `ida://` here (`idasql`, `hcli`, `other`, `none`), and the previous handler idasql saved |
 | `idasql link register` | Make idasql the `ida://` click handler. A handler it replaces (hcli's, say) is saved |
 | `idasql link unregister` | Remove idasql's registration and restore the saved handler (never removes another program's) |
 | `idasql link source add <name> <dir>` / `list` / `remove <name>` | Folders searched for a database a link names |
 | `idasql link config show` / `ida <path>` / `ida-args <arg>...` / `launch-timeout <s>` / `wait-analysis on\|off` | `links.json` in the user config directory |
 
-Exit codes: 0 opened, 1 usage, 2 invalid link, 3 nothing has the database open (and
-no launch), 4 several instances match (use `--pid`), 5 IDA refused, 6 launch failed,
-7 launch declined.
+Exit codes: 0 opened, 1 nothing has the database open (and no launch), 2 usage,
+4 invalid link, 5 several instances match (use `--pid`), 6 IDA refused, 7 launch failed,
+8 launch declined.
 
 Quote the link in every shell (`&` separates commands).
+
+### `idasql instances` (every IDA version)
+
+Lists the running IDAs without opening any database. Two sources, merged by process id:
+idasql's own registry (every idasql session, GUI plugin or `idasql -s`, writes its database
+and server URLs there while it runs; never a token) and, with IDA 9.4+, IDA's own IPC
+endpoints (every IDA GUI, idasql loaded or not, and whether its UI answers).
+
+| Command | What it does |
+|---------|--------------|
+| `idasql instances` | One line per IDA: pid, host (`gui`/`idalib`), IDA version, SQL URL (`*` = needs a token), remote control (`on`/`off`; `-` where it does not apply), state, database |
+| `idasql instances --json` | One object per IDA: `pid`, `host`, `ida_version`, `idasql_version`, `idb_path`, `idb_name`, `http`, `http_auth`, `mcp`, `mcp_auth`, `rescue`, `remote`, `started`, `idasql`, `ipc`, `responsive`, `analysis_complete` |
+| `idasql instances --pid N[,N...]` | Only those processes (the others are not asked) |
+
+Exit codes: 0 listed (an empty list included), 1 failed, 2 usage. A listing deletes the
+registry files of processes that are gone. The same rows from SQL: the `ida_instances` table.
+
+### `idasql close` (every IDA version)
+
+Ends an IDA cleanly from outside, saving or not. A URL means a remote IDA; anything else
+is a database path on this machine.
+
+| Command | What it does |
+|---------|--------------|
+| `idasql close <db> --save` | The IDA on this machine that has `<db>` open (GUI plugin, or an `idasql -s --http/--mcp` session) saves and quits; no server is needed |
+| `idasql close <db> --discard` | The same without saving: the database on disk stays exactly as it was |
+| `idasql close <url> --save\|--discard [--token T]` | The IDA serving SQL at `<url>` (`UPDATE ui_actions SET args = '{"save": ...}', run = 1 WHERE name = 'quit'` over `/query`) |
+
+`--timeout <s>` (default 60) is how long to wait for that IDA to end. Exit codes: 0 closed,
+1 nothing to close / refused (an `idasql -s -i` session serves nothing to close it through) /
+failed, 2 usage, 3 timed out (a frozen IDA cannot run the close: `idasql rescue <db> --kill`).
+Never close without the user asking.
+
+### `idasql http|mcp start|stop`, `idasql remote on|off` (every IDA version)
+
+Start or stop the servers of another IDA on this machine, from any terminal: the same verbs
+as in that IDA (`.http start`, `.mcp stop`, `.remote on`), plus a target. The target is the
+database it has open or its process id (`idasql instances` lists both).
+
+| Command | What it does |
+|---------|--------------|
+| `idasql http start <db\|pid>` | That IDA starts its HTTP server (127.0.0.1, or the database's own pin) and the URL is printed. One already running is left as it is: its URL, `(already running)` |
+| `idasql http stop <db\|pid>` | That IDA stops its HTTP server |
+| `idasql mcp start\|stop <db\|pid>` | The same for its MCP server (the URL ends in `/sse`) |
+| `idasql remote on\|off <db\|pid>` | Switch that database's remote control: on lets other processes of yours start/stop its servers. Off is the default; stored in the database (saved with it), like a pin |
+
+Start and stop need remote control on in that database (`.remote on` there, or `idasql remote
+on`). That IDA prints one line per request in its Output window, naming the process that asked.
+A token is never handed out: a server pinned with one is reported as needing it. `--json`
+prints the result (`ok`, `exit`, `pid`, `idb_path`, `message`, and for start `url`, `already`,
+`auth`); `--timeout <s>` (default 10) is how long to wait for that IDA's answer.
+
+Exit codes: 0 done, 1 not found / refused / failed, 2 usage, 3 timed out (IDA busy or frozen),
+4 remote control is off there.
+
+An `idasql -s` session takes no requests: one started with `--http` reports the URL it already
+serves; any other says it serves only when started with `--http` or `--mcp`.
+
+The same from SQL, against any idasql session: `UPDATE ida_instances SET remote = 1 WHERE pid =
+N`, `... SET start = 'http' ...`, `... SET stop = 'mcp' ...` (one other IDA per statement; this
+IDA's own row refuses them).
+
+### `idasql rescue` (every IDA version)
+
+Saves a copy of the database a **stuck** IDA has open (the GUI, through the idasql
+plugin, or a headless `idasql -s` session on the same machine). No `-s`, no idalib start.
+
+| Command | What it does |
+|---------|--------------|
+| `idasql rescue <db> [--timeout S]` | Save `<db>.rescued-<YYYYMMDD-HHMMSS>.<ext>` next to the database; an earlier rescue is never overwritten |
+| `idasql rescue <db> --kill [--timeout S]` | The same, then end that IDA (after the save, or after the timeout when the save cannot finish) |
+
+Exit codes: 0 saved, 1 no armed IDA has it open / the save failed / IDA exited during
+the save, 2 usage, 3 timed out. For a busy IDA (a script still calling IDA, analysis
+running) rescue may crash it: wait, or `--kill`. Never rescue or kill without the user
+asking.
 
 ### REPL Commands
 
@@ -124,6 +199,8 @@ Quote the link in every shell (`&` separates commands).
 | `.pin on\|off http\|mcp` | Enable/disable autostart-on-load (keeps host/port) |
 | `.pin clear [http\|mcp\|all]` | Remove pinned config (default `all`) |
 | `.pin help` | Show pin help |
+| `.remote` / `.remote status` | Show whether other processes may start/stop this database's servers |
+| `.remote on\|off` | Allow or refuse that (stored in the database; off by default). The IDA window answers such requests; an `idasql -s` session only sets the switch for later |
 
 > **Autostart pins.** A pin is stored in the IDB (netnode `$ idasql config`).
 > The `.pin` command works in both the CLI and the plugin — but **only the IDA
@@ -198,7 +275,8 @@ UPDATE runtime_settings SET value='64'     WHERE key='max_queue';               
 UPDATE runtime_settings SET value='1'      WHERE key='hints_enabled';               -- 1/0, on/off
 UPDATE runtime_settings SET value='1'      WHERE key='enable_idapython';            -- enable SQL Python
 UPDATE runtime_settings SET value='0'      WHERE key='idapython_output_max';        -- cap bytes (0 = unbounded)
-UPDATE runtime_settings SET value='1'      WHERE key='enable_deep_link_navigation'; -- let ida_open_link() steer IDA (IDA 9.4; ON in the plugin, OFF in the CLI)
+UPDATE runtime_settings SET value='1'      WHERE key='idapython_echo';              -- show every IDAPython run's output in IDA
+UPDATE runtime_settings SET value='1'      WHERE key='enable_deep_link_navigation'; -- let ida_open_link() steer IDA (IDA 9.4+; ON in the plugin, OFF in the CLI)
 UPDATE runtime_settings SET value='statement' WHERE key='auto_checkpoint';          -- an undo checkpoint per writing statement; 'off' (default)
 
 -- timeout_push/timeout_pop are the only PRAGMAs (imperative stack verbs)
